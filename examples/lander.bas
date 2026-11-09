@@ -1,0 +1,50 @@
+10 MODE 2:VDU 23,1,0;0;0;0;
+20 DIM h%(16),g%(160)
+30 VDU 23,224,&18,&3C,&7E,&5A,&7E,&24,&42,&C3,23,225,&3C,&3C,&18,&18,&18,&10,0,0
+35 COLOUR 3:PRINT TAB(3,4)"LUNAR LANDER"''" SPACE/RETURN:THRUST"'" Z/X: LEFT/RIGHT"''" Land on the green"'" pad, gently!"''"  PRESS A KEY":A=GET
+40 REPEAT
+50 CLS:PROCground:n%=0
+60 x=RND(1100):y=900:vx=(RND(3)-2)/2:vy=0:f%=400:X%=x:Y%=y:t%=0
+70 VDU 5,18,3,7,25,4,X%;Y%;224
+80 REPEAT
+90 ox%=X%:oy%=Y%:of%=t%:t%=0
+100 IF f%>0 AND (INKEY-99 OR INKEY-74) THEN vy=vy+0.2:f%=f%-2:t%=1
+110 IF f%>0 AND INKEY-98 THEN vx=vx-0.04:f%=f%-1
+120 IF f%>0 AND INKEY-67 THEN vx=vx+0.04:f%=f%-1
+130 IF f%<0 THEN f%=0
+140 vy=vy-0.08:x=x+vx:y=y+vy:n%=n%+1
+150 IF x<0 THEN x=0:vx=0
+160 IF x>1216 THEN x=1216:vx=0
+170 IF y>950 THEN y=950:vy=0
+180 X%=x:c%=X% DIV 8:G%=g%(c%):IF g%(c%+4)>G% THEN G%=g%(c%+4)
+190 IF g%(c%+7)>G% THEN G%=g%(c%+7)
+200 G%=G%+32:IF y<G% THEN y=G%
+210 Y%=y
+220 *FX19
+230 IF of% VDU 18,3,3,25,4,ox%;oy%-32;225
+240 VDU 18,3,7,25,4,ox%;oy%;224,25,4,X%;Y%;224
+250 IF t% VDU 18,3,3,25,4,X%;Y%-32;225
+260 IF (n% AND 3)=0 THEN VDU 4:COLOUR 3:PRINT TAB(0,0)"FUEL ";f%;" "TAB(11,0)"VY ";INT(vy*10);"  "TAB(11,1)"VX ";INT(vx*10);"  ":VDU 5
+270 UNTIL y<=G%
+280 IF t% VDU 18,3,3,25,4,X%;Y%-32;225
+290 VDU 4:ok%=X%>=p%*80 AND X%+64<=p%*80+160 AND vy>-2 AND ABS(vx)<0.8
+300 IF ok% THEN PROCmsg("LANDED!",2):COLOUR 3:PRINT TAB(4,7)"FUEL LEFT ";f% ELSE PROCboom:PROCmsg("CRASHED!",1)
+310 COLOUR 3:PRINT TAB(0,0)"FUEL ";f%;" "TAB(11,0)"VY ";INT(vy*10);"  "TAB(11,1)"VX ";INT(vx*10);"  "
+320 *FX15
+330 COLOUR 7:PRINT TAB(4,9)"SPACE: AGAIN"
+340 REPEAT UNTIL GET=32
+350 UNTIL FALSE
+360 DEF PROCground
+370 FOR i%=0 TO 16:h%(i%)=100+RND(300):NEXT
+380 p%=RND(12)+1:h%(p%+1)=h%(p%):h%(p%+2)=h%(p%)
+390 FOR i%=0 TO 159:j%=i%DIV10:g%(i%)=h%(j%)+(h%(j%+1)-h%(j%))*(i%MOD10)DIV10:NEXT
+400 GCOL0,6:FOR i%=0 TO 15:MOVE i%*80,0:MOVE i%*80,h%(i%):PLOT85,i%*80+80,0:PLOT85,i%*80+80,h%(i%+1):NEXT
+410 GCOL0,2:MOVE p%*80,h%(p%)-8:MOVE p%*80+160,h%(p%)-8:PLOT85,p%*80,h%(p%):PLOT85,p%*80+160,h%(p%)
+420 GCOL0,7:FOR i%=1 TO 40:PLOT69,RND(1280),500+RND(450):NEXT
+430 ENDPROC
+440 DEF PROCboom:LOCAL i%
+450 FOR i%=1 TO 40:GCOL0,RND(7):MOVE x+32,y-16:DRAW x+32+RND(160)-80,y+RND(120)-60:NEXT
+460 ENDPROC
+470 DEF PROCmsg(m$,c%)
+480 COLOUR c%:PRINT TAB(10-LEN(m$)/2,5)m$
+490 ENDPROC
