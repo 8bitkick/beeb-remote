@@ -48,47 +48,55 @@ Raspberry Pi 5: see [Setting up](#setting-up).
 
 ## Video at 50 frames a second
 
-Video at 50 frames a second, in MODE 0, 1, 2 or 7. It's lossy: the encoder on the Pi 5 scales
-each frame down to the mode's pixels and dithers it to its colours (the best 2 or 4 of the
-BBC's 8 for each scene in MODE 0 or 1, all 8 in MODE 2, teletext blocks in MODE 7). Then it sends only the
-bytes that changed, as many as the BBC can copy in one frame; what doesn't fit waits for the
-next frame, so fast motion can smear for a moment. The whole video is uploaded to the Pi1MHz
-first, and a player in the BBC's RAM copies from the Pi1MHz's buffer into screen memory.
-Below, MODE 0 as the BBC's screen memory held it, artefacts and all.
+Video at 50 frames a second, in MODE 7, 0, 1 or 2. It's lossy: the encoder on the Pi 5 scales
+each frame down to the mode's pixels and dithers it to the mode's colours. Then it sends only the
+bytes that changed, as many as the BBC can copy in a frame. The whole video is uploaded to the
+Pi1MHz first, and a player in the BBC's RAM copies from the Pi1MHz's buffer into screen memory.
 
-![MODE 0 video](images/video_mode0.gif)
-
-| MODE 2 | MODE 7 |
+| MODE 7: teletext | MODE 0: 2 colours |
 |---|---|
-| ![MODE 2 video](images/video_mode2.png) | ![MODE 7 video](images/video_mode7.png) |
+| <img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="400" height="320"> | <img src="images/bbb_mode0.gif" alt="Big Buck Bunny in MODE 0" width="400" height="320"> |
+| **MODE 1: a palette for every line** | **MODE 2: 8 colours** |
+| <img src="images/bbb_mode1.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="400" height="320"> | <img src="images/bbb_mode2.gif" alt="Big Buck Bunny in MODE 2" width="400" height="320"> |
 
-*The player runs on a real Model B; these captures are from the encoder and an emulated one.*
+*Captured from beebjit running the player and the real Pi1MHz firmware; not yet run on a real
+BBC. Big Buck Bunny (c) Blender Foundation, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/),
+[peach.blender.org](https://peach.blender.org).*
 
 ```
 python3 demo50.py ~/Videos/clip.mp4 --plan 7:8,0:8,1:8,2:8      # 8 s in each mode
+python3 demo50.py ~/Videos/bunny.mp4@118 --plan 1:15 --lines    # MODE 1, a palette for every line
 ```
 
 Run on the Pi 5. Needs ffmpeg and numpy, and Pi1MHz firmware with the stream buffer (see
 [Setting up](#setting-up)).
 
+- **MODE 7** draws each frame with teletext characters, text and graphics, whichever fits each
+  cell best ([Teletext Express](https://github.com/8bitkick/teletext-express)).
+- **MODE 0 and plain MODE 1** pick the best 2 or 4 of the BBC's 8 colours for each scene.
+- **MODE 2** has all 8.
+
 ### MODE 1 with a palette for every line
 
 With `--lines`, each line of MODE 1 can change one of its four colours from the line above's,
-so the whole screen can show all 8 of the BBC's colours rather than 4. The player writes the
-new colour in the horizontal blank before the line, timed to the cycle. Lines also pass a
-little of their colour error to the line below, so neighbouring lines mix into colours neither
-has. The cost is copying time: on this clip the palette changes take 7% of a frame's copying time
-(21% at most), and fitting the copies around them loses some more, so fast motion smears more.
+so the screen can show all 8 of the BBC's colours at MODE 1's resolution. The player writes the
+new colour in the horizontal blank before the line, timed to the cycle (the idea is Kieran
+Connell's).
 
-<img src="images/video_mode1_lines.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="640" height="480">
+- **Bytes and colours change together.** A screen byte means nothing without its line's colours,
+  so a row's new bytes are copied after the raster has drawn it in one frame and before it comes
+  back in the next, when the new colours arrive too.
+- **Rows wait whole.** A row that doesn't fit in a frame keeps its old bytes and old colours
+  until a frame has room. A scene cut wipes in from the top over a few frames, rather than
+  showing old bytes through new colours.
+- **The dither** is ordered, with a blue-noise map (no cross-hatching), with colours mixed
+  nearer linear light (a dither mixes light: half white, half black looks a light grey).
+- **The encoder sends as little as it can.** A pixel keeps its colour while it's still close
+  enough, and lines pass only a little of their error to the line below, so a change in one
+  part of the picture doesn't ripple down the screen.
 
-*Captured from beebjit running the player, every frame checked against what the encoder meant;
-not yet run on a real BBC. Idea from Kieran Connell. Big Buck Bunny (c) Blender Foundation,
-[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), [peach.blender.org](https://peach.blender.org).*
-
-```
-python3 demo50.py ~/Videos/bunny.mov@8 --plan 1:15 --lines
-```
+The encoder knows every op's cost to the cycle, and every frame of the capture above was checked
+in beebjit against what the encoder meant, pixel for pixel.
 
 ## Remote debugging
 
@@ -129,11 +137,11 @@ an emulator. Connecting it to a physical BBC Micro through this API is in progre
 
 - **A BBC Micro Model B** (MOS 1.20). Typing at the keyboard is Model B only for now.
 - **A Pi1MHz** on the 1 MHz bus, on your WiFi, running firmware with the **RAM probe**: the
-  `ramprobe` branch of [8bitkick/Pi1MHz](https://github.com/8bitkick/Pi1MHz/tree/ramprobe),
-  proposed upstream in [dp111/Pi1MHz#51](https://github.com/dp111/Pi1MHz/pull/51) (its review's
-  changes are on `ramprobe-review`). Video also needs the stream buffer: the
-  [`stream-review`](https://github.com/8bitkick/Pi1MHz/tree/stream-review) branch (or the older
-  `stream-buffer`), with that build's `Pi1MHz/6502code.bin` on the SD card.
+  [`ramprobe-review`](https://github.com/8bitkick/Pi1MHz/tree/ramprobe-review) branch of
+  8bitkick/Pi1MHz, the probe as proposed upstream in [dp111/Pi1MHz#51](https://github.com/dp111/Pi1MHz/pull/51)
+  with that review's changes. Video also needs the stream buffer:
+  [`stream-review`](https://github.com/8bitkick/Pi1MHz/tree/stream-review), one commit on top of
+  `ramprobe-review`. Put that build's `Pi1MHz/6502code.bin` on the SD card with the kernel.
 - **Another computer on the same network** with Python 3: a Raspberry Pi 5 works well.
 
 ### On the BBC
@@ -199,7 +207,7 @@ screen reads MODE 7's screen memory; Escape sets the OS's escape flag.
 `tests/` builds [beebjit](https://github.com/scarybeasts/beebjit) with the real Pi1MHz probe
 firmware patched in (`tests/beebjit/`), boots a Model B, and runs the clients against it over
 HTTP, with a scripted model in place of Claude. No API key needed. It wants a Pi1MHz checkout on
-the `ramprobe` or `stream-buffer` branch in `PI1MHZ` (default `~/Pi1MHz`) and a beebjit checkout
+the `ramprobe-review` or `stream-review` branch in `PI1MHZ` (default `~/Pi1MHz`) and a beebjit checkout
 in `BEEBJIT`.
 
 ```
