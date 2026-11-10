@@ -94,6 +94,16 @@ state and Halt, Continue and Peek buttons:
 
 <img src="images/probe_page.png" alt="The Pi1MHz probe page" width="420">
 
+## Game agents (in progress)
+
+[elite-agent](https://github.com/8bitkick/elite-agent) plays Acornsoft Elite by reading the
+machine's RAM and pressing keys. It plays the Model B's flicker-free disc version, so far beside
+an emulator. Connecting it to a physical BBC Micro through this API is in progress.
+
+<img src="images/elite_agent.png" alt="elite-agent in a fight, watched from the side view" width="420">
+
+*elite-agent on an emulated machine.*
+
 ## Setting up
 
 ### What you need
