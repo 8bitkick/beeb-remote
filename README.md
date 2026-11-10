@@ -55,9 +55,9 @@ Pi1MHz first, and a player in the BBC's RAM copies from the Pi1MHz's buffer into
 
 | MODE 7: teletext | MODE 0: 2 colours |
 |---|---|
-| <img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="400" height="320"> | <img src="images/bbb_mode0.gif" alt="Big Buck Bunny in MODE 0" width="400" height="320"> |
+| <img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="400"> | <img src="images/bbb_mode0.gif" alt="Big Buck Bunny in MODE 0" width="400"> |
 | **MODE 1: a palette for every line** | **MODE 2: 8 colours** |
-| <img src="images/bbb_mode1.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="400" height="320"> | <img src="images/bbb_mode2.gif" alt="Big Buck Bunny in MODE 2" width="400" height="320"> |
+| <img src="images/bbb_mode1.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="400"> | <img src="images/bbb_mode2.gif" alt="Big Buck Bunny in MODE 2" width="400"> |
 
 *Captured from beebjit running the player and the real Pi1MHz firmware; not yet run on a real
 BBC. Big Buck Bunny (c) Blender Foundation, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/),
