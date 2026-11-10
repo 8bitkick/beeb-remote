@@ -330,6 +330,8 @@ PIVOT = {7: 0.5, 0: 0.58, 1: 0.5, 2: 0.5}    # the grey that stays put: above th
 # --lines: a gentler curve (eight colours to dither with need less help), and a pale or dark
 # scene not stretched to the full range (a pale sky would go saturated blue)
 LINES_LEVELS = dict(black=0.06, contrast=0.9, least=0.8)
+LINES_GAMMA = 1.8          # the colours are chosen nearer linear light: a dither mixes light, so half
+                           # white and half black looks a light grey, not a middle one
 
 
 class Levels:
@@ -348,9 +350,9 @@ class Levels:
             self.lo += 0.1 * (lo - self.lo)
             self.hi += 0.1 * (hi - self.hi)
         lo, hi = self.lo, self.hi
-        if hi - lo < self.least:
-            mid = (lo + hi) / 2
-            lo, hi = mid - self.least / 2, mid + self.least / 2
+        if hi - lo < self.least:                   # widened towards 0 and 1 in proportion to the room
+            a = (self.least - (hi - lo)) / max(1 - (hi - lo), 1e-3)   # each side: a pale scene stays pale
+            lo, hi = lo * (1 - a), hi + (1 - hi) * a
         x = np.clip(0.5 + self.contrast * ((rgb - lo) / max(hi - lo, 1e-3) - self.pivot), 0, 1)
         return self.black + (1 - self.black) * x
 
@@ -593,7 +595,7 @@ def frames_lines(path, start, seconds, fps):
         small = f[::8, ::8]
         cut = last_small is not None and np.abs(small - last_small).mean() > 0.12
         last_small = small
-        yield cut, levels(smooth(f, cut), cut)
+        yield cut, levels(smooth(f, cut), cut) ** LINES_GAMMA
 
 
 LINE_A = 4550              # line y's palette op starts LINE_A + 128 * y cycles from the frame's first op;
@@ -993,7 +995,7 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L5' if o.lines else ''}.v2.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L6' if o.lines else ''}.v2.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
