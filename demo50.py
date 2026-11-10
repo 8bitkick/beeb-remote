@@ -479,8 +479,10 @@ LINE_MASK = np.zeros((8, len(LINE_COMBOS)), dtype=bool)
 for j, c in enumerate(LINE_COMBOS):
     LINE_MASK[list(c), j] = True
 LINE_WT = np.array([1.0, 1.0, 1.0])   # how much an error in red, green, blue counts
+LINE_EPS = 0.6             # a pixel keeps its colour while it's this close to the best (squared colour)
+                           # and the line's colours stay: fewer bytes to send, the picture barely changed
 LINE_STAY = 0.02           # what keeping a line's colours from the last frame is worth: no flicker
-LINE_CARRY = 0.4           # how much of a line's error the next line down takes: lines then mix
+LINE_CARRY = 0.25          # how much of a line's error the next line down takes: lines then mix
                            # into colours neither has, a dither down the screen as well as across
 
 
@@ -604,7 +606,7 @@ class LinePalettes:
                 p = dist.argmin(1)
                 if not cut and (self.pals[y] == cur).all():
                     q = self.pix[y].astype(int)
-                    p = np.where(dist[np.arange(w), q] - dist.min(1) < EPS[1], q, p)
+                    p = np.where(dist[np.arange(w), q] - dist.min(1) < LINE_EPS, q, p)
             pals[y], pix[y] = cur, p
             carry = np.clip(LINE_CARRY * (t - PHYS[np.array(cur)[p]]), -0.5, 0.5)
         return pals, pix
@@ -1049,7 +1051,7 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L8' if o.lines else ''}.v2.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L9' if o.lines else ''}.v2.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
