@@ -16,7 +16,10 @@
 
 #include "Pi1MHz.h"
 #include "ramprobe.h"
-#include "ramprobe_agent.h"
+#if __has_include("ramprobe_agent.h")
+#include "ramprobe_agent.h"           /* the ramprobe and stream-buffer branches: pages built into the kernel */
+#define RP_PAGES_BUILT_IN 1
+#endif
 #include "ramprobe_api.h"
 
 /* ---- the board around the firmware --------------------------------------- */
@@ -71,6 +74,28 @@ void helpers_set_page(uint8_t page, const uint8_t *bytes, size_t length)
    memset(helper + (page << 8), 0, 256);
    memcpy(helper + (page << 8), bytes, length);
 }
+int helpers_page_number(uint8_t page) { return page < 47 ? helper[(page << 8) + 255] : -1; }
+uint8_t Pi1MHz_MemoryRead(uint32_t addr) { return pi.Memory[addr & 0x1ffu]; }
+#ifndef RP_PAGES_BUILT_IN
+/* Since the PR #51 review the probe's pages are helpers 22-24 in 6502code.bin, loaded with the
+   other helpers: here from RAMPROBE_6502CODE, which run_beebjit.sh sets. */
+static uint8_t code_bin[47 * 256];
+static void load_probe_pages(void)
+{
+   static bool loaded;
+   const char *path = getenv("RAMPROBE_6502CODE");
+   FILE *f;
+   if (!loaded) {
+      if (path == NULL || (f = fopen(path, "rb")) == NULL || fread(code_bin, 1, sizeof code_bin, f) != sizeof code_bin) {
+         fprintf(stderr, "RAMPROBE_6502CODE: need the Pi1MHz checkout's firmware/Pi1MHz/6502code.bin\n");
+         exit(2);
+      }
+      fclose(f);
+      loaded = true;
+   }
+   for (unsigned i = 22; i <= 24; i++) memcpy(helper + (i << 8), code_bin + (i << 8), 256);
+}
+#endif
 void services_emulator_init(uint8_t instance, uint8_t address);
 
 /* A request's body for the test servers: Content-Length bytes after the header, those that came
@@ -188,6 +213,9 @@ static void board_reset(void)
    memcpy(pi.Memory + 0x88, code, 7);
    memset(helper, 0, sizeof helper);
    for (int i = 0; i < 47; i++) { helper[i << 8] = 0xA2; helper[(i << 8) + 1] = 0xFF; helper[(i << 8) + 2] = 0x4C; helper[(i << 8) + 3] = 0x88; helper[(i << 8) + 4] = 0xFC; }
+#ifndef RP_PAGES_BUILT_IN
+   load_probe_pages();
+#endif
    page_addr = 0;
    pending = -1;
    window_is_helper = false;

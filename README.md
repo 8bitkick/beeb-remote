@@ -130,8 +130,10 @@ an emulator. Connecting it to a physical BBC Micro through this API is in progre
 - **A BBC Micro Model B** (MOS 1.20). Typing at the keyboard is Model B only for now.
 - **A Pi1MHz** on the 1 MHz bus, on your WiFi, running firmware with the **RAM probe**: the
   `ramprobe` branch of [8bitkick/Pi1MHz](https://github.com/8bitkick/Pi1MHz/tree/ramprobe),
-  proposed upstream in [dp111/Pi1MHz#51](https://github.com/dp111/Pi1MHz/pull/51). Video also
-  needs the stream buffer: the [`stream-buffer`](https://github.com/8bitkick/Pi1MHz/tree/stream-buffer) branch.
+  proposed upstream in [dp111/Pi1MHz#51](https://github.com/dp111/Pi1MHz/pull/51) (its review's
+  changes are on `ramprobe-review`). Video also needs the stream buffer: the
+  [`stream-review`](https://github.com/8bitkick/Pi1MHz/tree/stream-review) branch (or the older
+  `stream-buffer`), with that build's `Pi1MHz/6502code.bin` on the SD card.
 - **Another computer on the same network** with Python 3: a Raspberry Pi 5 works well.
 
 ### On the BBC

@@ -139,7 +139,8 @@ class BBC:
         order = self._order(vsync)
         for rung in order:
             try:
-                s = self._act(path, body=body, rung=rung, **params)
+                extra = {"nmi": 1} if rung == 2 else {}       # the firmware since the PR #51 review wants it
+                s = self._act(path, body=body, rung=rung, **params, **extra)
                 self.rung = s.get("rung", 2)
                 return s
             except ProbeError as e:

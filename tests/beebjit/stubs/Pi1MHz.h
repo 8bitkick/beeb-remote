@@ -28,6 +28,7 @@ typedef void (*callback_func_ptr)(unsigned int);
 void Pi1MHz_Register_Memory(unsigned int access, unsigned int addr, callback_func_ptr function_ptr);
 void Pi1MHz_Register_Poll(func_ptr function_ptr, const char *name);
 void Pi1MHz_MemoryWrite(uint32_t addr, uint8_t data);
+uint8_t Pi1MHz_MemoryRead(uint32_t addr);
 void Pi1MHz_MemoryWrite16(uint32_t addr, uint32_t data);
 void Pi1MHz_nIRQ_ASSERT(uint8_t src);
 void Pi1MHz_nIRQ_CLEAR(uint8_t src);
