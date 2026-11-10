@@ -330,7 +330,7 @@ PIVOT = {7: 0.5, 0: 0.58, 1: 0.5, 2: 0.5}    # the grey that stays put: above th
 # --lines: a gentler curve (eight colours to dither with need less help), and a pale or dark
 # scene not stretched to the full range (a pale sky would go saturated blue)
 LINES_LEVELS = dict(black=0.06, contrast=0.9, least=0.8)
-LINES_GAMMA = 1.5          # the colours are chosen nearer linear light: a dither mixes light, so half
+LINES_GAMMA = 1.8          # the colours are chosen nearer linear light: a dither mixes light, so half
                            # white and half black looks a light grey, not a middle one
 
 
@@ -482,7 +482,7 @@ LINE_WT = np.array([1.0, 1.0, 1.0])   # how much an error in red, green, blue co
 LINE_EPS = 0.6             # a pixel keeps its colour while it's this close to the best (squared colour)
                            # and the line's colours stay: fewer bytes to send, the picture barely changed
 LINE_STAY = 0.02           # what keeping a line's colours from the last frame is worth: no flicker
-LINE_CARRY = 0.25          # how much of a line's error the next line down takes: lines then mix
+LINE_CARRY = 0.4           # how much of a line's error the next line down takes: lines then mix
                            # into colours neither has, a dither down the screen as well as across
 
 
@@ -521,7 +521,8 @@ def blue_noise(n=64, sigma=1.9, seed=7):
     return (rank + 0.5) / (n * n)
 
 
-LINE_MASK_KIND = "blue"    # the ordered dither's threshold map: "bayer" or "blue"
+LINE_MASK_KIND = "bayer"   # the ordered dither's threshold map: "bayer" or "blue" (blue: no cross-
+                           # hatching, but the colours looked better to people with Bayer)
 
 
 class LinePalettes:
@@ -1051,7 +1052,7 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L9' if o.lines else ''}.v2.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L10' if o.lines else ''}.v2.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
