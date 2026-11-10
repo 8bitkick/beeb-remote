@@ -327,12 +327,18 @@ CONTRAST = {7: 1, 0: 1.7, 1: 1.2, 2: 1.2}    # the slope about the pivot: steepe
 PIVOT = {7: 0.5, 0: 0.58, 1: 0.5, 2: 0.5}    # the grey that stays put: above the middle, more of the picture goes black
 
 
+# --lines: a gentler curve (eight colours to dither with need less help), and a pale or dark
+# scene not stretched to the full range (a pale sky would go saturated blue)
+LINES_LEVELS = dict(black=0.06, contrast=0.9, least=0.8)
+
+
 class Levels:
     """The frame's levels stretched to the full range, smoothed over time so the brightness
     doesn't pump from frame to frame; a cut starts afresh."""
     def __init__(self, mode):
         self.lo = self.hi = None
         self.black, self.contrast, self.pivot = BLACK[mode], CONTRAST[mode], PIVOT[mode]
+        self.least = 0.0                           # the least range stretched to 0-1
 
     def __call__(self, rgb, cut):
         lo, hi = np.percentile(rgb, (1, 99))
@@ -341,7 +347,11 @@ class Levels:
         else:
             self.lo += 0.1 * (lo - self.lo)
             self.hi += 0.1 * (hi - self.hi)
-        x = np.clip(0.5 + self.contrast * ((rgb - self.lo) / max(self.hi - self.lo, 1e-3) - self.pivot), 0, 1)
+        lo, hi = self.lo, self.hi
+        if hi - lo < self.least:
+            mid = (lo + hi) / 2
+            lo, hi = mid - self.least / 2, mid + self.least / 2
+        x = np.clip(0.5 + self.contrast * ((rgb - lo) / max(hi - lo, 1e-3) - self.pivot), 0, 1)
         return self.black + (1 - self.black) * x
 
 
@@ -466,6 +476,7 @@ LINE_CHANGES = np.array([[4 - len(a & b) for b in LINE_SETS] for a in LINE_SETS]
 LINE_MASK = np.zeros((8, len(LINE_COMBOS)), dtype=bool)
 for j, c in enumerate(LINE_COMBOS):
     LINE_MASK[list(c), j] = True
+LINE_WT = np.array([1.0, 1.0, 1.0])   # how much an error in red, green, blue counts
 LINE_STAY = 0.02           # what keeping a line's colours from the last frame is worth: no flicker
 LINE_CARRY = 0.4           # how much of a line's error the next line down takes: lines then mix
                            # into colours neither has, a dither down the screen as well as across
@@ -542,14 +553,14 @@ class LinePalettes:
                         ok = [base]
                     cands = ok
                 C = np.array(cands)
-                d8 = ((t[:, None, :] - PHYS[None]) ** 2).sum(2)                      # w x 8
+                d8 = (((t[:, None, :] - PHYS[None]) ** 2) * LINE_WT).sum(2)           # w x 8
                 err = d8[:, C].min(2).mean(0)
                 if not cut:
                     same = np.array([sorted(v) == sorted(self.pals[y]) for v in cands])
                     err = err + LINE_STAY * ~same
                 cur = cands[int(err.argmin())]
                 x = t + (self.t[y][:, None] - 0.5) * AMPLITUDE
-                dist = ((x[:, None, :] - PHYS[cur][None]) ** 2).sum(2)               # w x 4
+                dist = (((x[:, None, :] - PHYS[cur][None]) ** 2) * LINE_WT).sum(2)    # w x 4
                 p = dist.argmin(1)
                 if not cut and (self.pals[y] == cur).all():
                     q = self.pix[y].astype(int)
@@ -577,6 +588,7 @@ def frames_lines(path, start, seconds, fps):
     """The MODE 1 frames, levelled and smoothed: (cut, rgb)."""
     m = MODES[1]
     smooth, levels, last_small = Smooth(), Levels(1), None
+    levels.black, levels.contrast, levels.least = LINES_LEVELS["black"], LINES_LEVELS["contrast"], LINES_LEVELS["least"]
     for f in source(path, start, seconds, m["w"], m["h"], fps):
         small = f[::8, ::8]
         cut = last_small is not None and np.abs(small - last_small).mean() > 0.12
@@ -981,7 +993,7 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L4' if o.lines else ''}.v2.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L5' if o.lines else ''}.v2.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
