@@ -5,6 +5,7 @@ palette chosen for each scene.  Played from the Pi1MHz's own memory, with no net
     python3 demo50.py ~/Videos/rick50.mp4                      # encode (cached), upload, play
     python3 demo50.py ~/Videos/rick50.mp4@40 ~/Videos/rick50.mp4@100 --plan 7:8,0:8,1:8,2:8
     python3 demo50.py ~/Videos/rick50.mp4 --plan 7:20,0:20,1:20 --encode-only
+    python3 demo50.py ~/Videos/bunny.mov@8 --plan 1:15 --lines         # a palette for every line
 
 Every frame of the 50 fps source is drawn: nothing is skipped and nothing is faked.  The BBC is
 taken over completely (interrupts off, the vsync read from the System VIA), and the encoder
@@ -29,7 +30,18 @@ The stream, read through the services port from &400000:
           drawing time), bit 7 set: 16 bytes for the video ULA's palette register come first
   ops     [entry low][Y] (+ data last byte first): jump to entry in the current code page with
           Y: a chain copies 1-15 bytes to its page + Y; a page stub makes Y the code page; the
-          end stub (in the player's page) ends the frame
+          end stub (in the player's page) ends the frame; the special stub (in every code page
+          but the player's) with Y < &80 sets one MODE 1 colour, with Y >= &80 is a pad
+
+With --lines, MODE 1 has a palette for every line (Kieran Connell's idea): each line may change
+one of its four colours from the line above's, written in the horizontal blank before it.  The
+encoder knows every op's cost to the cycle (a 1 MHz read ends on an even cycle, so each op's cost
+is fixed), so it places each palette op on its exact cycle from the frame's first op and fills
+the time between with copies and pads.  The palette op costs 60 cycles of copying time, and
+fitting the copies around the ops costs some more.  The lines' colours are
+chosen top down with a little of each line's error carried to the next, so lines mix into
+colours neither has: dithering down the screen as well as across.  Checked in beebjit, frame by
+frame against what the encoder meant; not yet on a real BBC.
 """
 import argparse
 import itertools
@@ -176,16 +188,16 @@ haspal: BYTES 00
 palbuf: BYTES 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 """
 BLOCK = 6 * CHAIN + 11 + 5
-TAB = BLOCKS + BLOCK * PAGES               # the mode tables, after the blocks
+# R8 is 0, not interlaced as the OS has it: every field is then 312 lines, so the raster is in the
+# same place after every vsync, which the line palettes need.
 TABLES = bytes.fromhex("0C 0D 4B 3F 28 33 24 1E 02 19 1B 93 12 20 13 28 00"    # MODE 7 (OS 1.20's, cursor off)
-                       "04 0D 9C 7F 50 62 28 26 00 20 22 01 07 20 08 06 00"    # MODE 0
-                       "04 0D D8 7F 50 62 28 26 00 20 22 01 07 20 08 06 00"    # MODE 1
-                       "04 0D F4 7F 50 62 28 26 00 20 22 01 07 20 08 06 00")   # MODE 2
-MAIN_CODE, L = asm(MAIN, PLAYER, {"TAB": TAB})
-assert len(MAIN_CODE) <= 0x100, len(MAIN_CODE)
-
+                       "04 0D 9C 7F 50 62 28 26 00 20 22 00 07 20 08 06 00"    # MODE 0
+                       "04 0D D8 7F 50 62 28 26 00 20 22 00 07 20 08 06 00"    # MODE 1
+                       "04 0D F4 7F 50 62 28 26 00 20 22 00 07 20 08 06 00")   # MODE 2
+SPECIAL = 0x0B00                           # the line palette and the pads (see LINES below)
 # A block for each page of screen memory: the chain (its last unit writes offset 0, so entering
 # at unit CHAIN-n copies n bytes to page+Y+n-1 down to page+Y), its own dispatch, its page stub.
+# Every code page also has a JMP SPECIAL, so a line palette or a pad can come from any page.
 BLOCK_SRC = "\n".join(f"        LDA &FCA9\n        STA &{{page:02X}}{CHAIN - 1 - i:02X},Y" for i in range(CHAIN)) + """
 disp:   LDA &FCA9
         STA &72
@@ -194,25 +206,75 @@ disp:   LDA &FCA9
 setpg:  STY &73
         JMP disp
 """
-BLOCKS_CODE = bytearray()
+STUB = bytes((0x4C, SPECIAL & 255, SPECIAL >> 8))
+BLOCKS_CODE, BLOCK_AT, SPECIAL_LO, SETPG_LO = bytearray(), [], {}, {}
 for i in range(PAGES):
-    code, bl = asm(BLOCK_SRC.format(page=(SCREEN >> 8) + i), BLOCKS + BLOCK * i)
-    assert len(code) == BLOCK and bl["setpg"] == BLOCKS + BLOCK * i + 6 * CHAIN + 11
+    at = BLOCKS + len(BLOCKS_CODE)
+    if at >> 8 not in SPECIAL_LO:
+        SPECIAL_LO[at >> 8] = at & 255
+        BLOCKS_CODE += STUB
+        at += 3
+    code, bl = asm(BLOCK_SRC.format(page=(SCREEN >> 8) + i), at)
+    assert len(code) == BLOCK and bl["setpg"] == at + 6 * CHAIN + 11
+    SETPG_LO.setdefault(bl["setpg"] >> 8, bl["setpg"] & 255)
+    BLOCK_AT.append(at)
     BLOCKS_CODE += code
-assert BLOCKS + len(BLOCKS_CODE) == TAB
-BLOCKS_CODE = bytes(BLOCKS_CODE) + TABLES
+TAB = BLOCKS + len(BLOCKS_CODE)            # the mode tables, after the blocks
+BLOCKS_CODE += TABLES
+end = BLOCKS + len(BLOCKS_CODE)
+if (end - 1) >> 8 not in SPECIAL_LO:
+    SPECIAL_LO[(end - 1) >> 8] = end & 255
+    BLOCKS_CODE += STUB
+BLOCKS_CODE = bytes(BLOCKS_CODE)
 assert BLOCKS + len(BLOCKS_CODE) <= SCREEN, hex(BLOCKS + len(BLOCKS_CODE))
-# a page stub in every code page, for leaving it
-SETPG_LO = {PLAYER >> 8: L["setpg"] & 255}
-for i in range(PAGES):
-    a = BLOCKS + BLOCK * i + 6 * CHAIN + 11
-    SETPG_LO.setdefault(a >> 8, a & 255)
-assert all(p in SETPG_LO for p in range(BLOCKS >> 8, (TAB - 1) >> 8)), SETPG_LO
+MAIN_CODE, L = asm(MAIN, PLAYER, {"TAB": TAB})
+assert len(MAIN_CODE) <= 0x100, len(MAIN_CODE)
+SETPG_LO[PLAYER >> 8] = L["setpg"] & 255
+assert all(p in SETPG_LO and p in SPECIAL_LO for p in range(BLOCKS >> 8, (TAB - 1) >> 8)), (SETPG_LO, SPECIAL_LO)
 
 
 def entry(addr, n):
     """The address of the chain copying n bytes to the screen address addr and up."""
-    return BLOCKS + BLOCK * ((addr >> 8) - (SCREEN >> 8)) + 6 * (CHAIN - n)
+    return BLOCK_AT[(addr >> 8) - (SCREEN >> 8)] + 6 * (CHAIN - n)
+
+
+# ---- line palettes (MODE 1): a colour changed in the horizontal blank before any line ----------
+# An op [SPECIAL_LO[page]][Y]: Y < &80 writes logical colour Y >> 3 as physical colour Y & 7 (its
+# four entries of the video ULA's palette, from the tables at PALTAB); Y >= &80 is a pad, entering
+# the run of NOPs at &0B00 + Y.  The encoder knows every op's cost to the cycle, so it starts each
+# line's palette op where its writes land in that line's blank.
+PALTAB = 0x0C00
+SPECIAL_SRC = f"""
+special: CPY #&80
+        BCS pad
+        LDA &{PALTAB:04X},Y
+        LDX &{PALTAB + 32:04X},Y
+        STA &FE21
+        STX &FE21
+        LDA &{PALTAB + 64:04X},Y
+        STA &FE21
+        LDA &{PALTAB + 96:04X},Y
+        STA &FE21
+        JMP &{L["disp"]:04X}
+pad:    STY &76
+        JMP (&0076)
+"""
+SLED_AT, SLED_NOPS = 0x80, 120
+SPECIAL_CODE = asm(SPECIAL_SRC, SPECIAL)[0]
+assert len(SPECIAL_CODE) <= SLED_AT
+SPECIAL_CODE = (SPECIAL_CODE.ljust(SLED_AT, b"\xEA") + b"\xEA" * SLED_NOPS + bytes((0x24, 0x70))
+                + bytes((0x4C, L["disp"] & 255, L["disp"] >> 8)))
+assert len(SPECIAL_CODE) <= 0x100
+M1_ENTRIES = [[e for e in range(16) if ((e >> 3) & 1) * 2 + ((e >> 1) & 1) == c] for c in range(4)]
+PALTAB_CODE = bytes((M1_ENTRIES[i >> 3][k] << 4) | ((i & 7) ^ 7) for k in range(4) for i in range(32))
+PAL_OP = 60                # its writes at 35, 39, 47 and 55 cycles from its start
+PAD_MIN, PAD_MAX = 40, 40 + 2 * SLED_NOPS
+
+
+def pad_y(cycles):
+    """The Y of the pad op costing cycles (even, PAD_MIN to PAD_MAX)."""
+    assert cycles % 2 == 0 and PAD_MIN <= cycles <= PAD_MAX, cycles
+    return SLED_AT + SLED_NOPS - (cycles - PAD_MIN) // 2
 
 
 MODES = {7: dict(w=240, h=250, at=0x7C00 - SCREEN, size=1000),
@@ -389,6 +451,87 @@ def targets(path, mode, start, seconds, fps, table):
         n += 1
 
 
+# ---- MODE 1 with a palette for every line ---------------------------------------------------
+LINE_COMBOS = [c for c in itertools.combinations(range(8), 4) if 0 in c]       # black always one
+LINE_SETS = [set(c) for c in LINE_COMBOS]
+LINE_CHANGES = np.array([[4 - len(a & b) for b in LINE_SETS] for a in LINE_SETS])
+LINE_MASK = np.zeros((8, len(LINE_COMBOS)), dtype=bool)
+for j, c in enumerate(LINE_COMBOS):
+    LINE_MASK[list(c), j] = True
+LINE_STAY = 0.02           # what keeping a line's colours from the last frame is worth: no flicker
+LINE_CARRY = 0.4           # how much of a line's error the next line down takes: lines then mix
+                           # into colours neither has, a dither down the screen as well as across
+
+
+class LinePalettes:
+    """For each line in turn, top down: the error carried from the line above added, the best 4
+    colours of those at most one colour from the line above's (one palette op), scored on the
+    whole line, then the line ordered-dithered across.  A colour that stays keeps its logical
+    colour, so only the changed one needs a palette op and its pixels redrawing."""
+    def __init__(self):
+        self.st = self.pals = self.pix = None
+        self.t = bayer(256, 320)
+
+    def __call__(self, rgb, cut):
+        fresh = cut or self.st is None
+        h, w, _ = rgb.shape
+        st, pals, pix = np.zeros(h, int), np.zeros((h, 4), int), np.zeros((h, w), np.uint8)
+        carry, cur_s, cur = np.zeros((w, 3)), None, None
+        for y in range(h):
+            t = rgb[y] + carry
+            d8 = ((t[:, None, :] - PHYS[None]) ** 2).sum(2)                        # w x 8
+            err = np.where(LINE_MASK[None], d8[:, :, None], 9.0).min(1).mean(0)     # each combo
+            if cur_s is not None:
+                err = np.where(LINE_CHANGES[cur_s] <= 1, err, np.inf)
+            if not fresh:
+                err = err + LINE_STAY * (np.arange(len(LINE_COMBOS)) != self.st[y])
+            j = int(err.argmin())
+            new = LINE_COMBOS[j]
+            old = cur if cur is not None else (None if fresh else list(self.pals[0]))
+            if old is None:
+                cur = list(new)
+            else:
+                keep = [c if c in new else None for c in old]
+                rest = iter(c for c in new if c not in keep)
+                cur = [c if c is not None else next(rest) for c in keep]
+            cur_s, st[y], pals[y] = j, j, cur
+            x = t + (self.t[y][:, None] - 0.5) * AMPLITUDE
+            dist = ((x[:, None, :] - PHYS[cur][None]) ** 2).sum(2)                 # w x 4
+            p = dist.argmin(1)
+            if not fresh and (self.pals[y] == cur).all():
+                q = self.pix[y].astype(int)
+                p = np.where(dist[np.arange(w), q] - dist.min(1) < EPS[1], q, p)
+            pix[y] = p
+            carry = np.clip(LINE_CARRY * (t - PHYS[np.array(cur)[p]]), -0.5, 0.5)
+        self.st, self.pals, self.pix = st, pals, pix
+        return pals, pix
+
+
+def targets_lines(path, start, seconds, fps):
+    """For each MODE 1 frame: (cut, the 16 palette bytes for line 0, screen memory, the palette
+    ops [(line, Y)] for lines 1-255, the 256 lines' colours)."""
+    m = MODES[1]
+    smooth, levels, lp, last_small = Smooth(), Levels(1), LinePalettes(), None
+    for f in source(path, start, seconds, m["w"], m["h"], fps):
+        small = f[::8, ::8]
+        cut = last_small is not None and np.abs(small - last_small).mean() > 0.12
+        last_small = small
+        pals, pix = lp(levels(smooth(f, cut), cut), cut)
+        ops = []
+        for y in range(1, 256):
+            ch = [k for k in range(4) if pals[y][k] != pals[y - 1][k]]
+            assert len(ch) <= 1
+            if ch:
+                ops.append((y, ch[0] * 8 + int(pals[y][ch[0]])))
+        yield cut, ula_palette(1, tuple(int(c) for c in pals[0])), bp.pack(pix, 1), ops, pals
+
+
+LINE_A = 4550              # cycles from a frame's first op to the start of line 1's palette op;
+                           # its writes then land in the middle of the blank (measured in beebjit:
+                           # 4535-4565 is clean)
+LINE_END = 39000           # the frame's ops end by here, leaving the next header time before the vsync
+
+
 # ---- the changes, costed ------------------------------------------------------------------
 class Screen:
     """What the BBC's screen memory holds, and the ops that take it towards each frame within
@@ -481,10 +624,94 @@ class Screen:
         return codes, cost, int(changed.sum()), left
 
 
+    def encode_lines(self, cur, ops, wipe=False):
+        """A MODE 1 frame with line palettes: each palette op starts on its cycle, LINE_A + 128 *
+        line from the frame's first op, and the copies fill the time between, the longest-waiting
+        bytes first, in address order, padded to the cycle."""
+        care = np.ones(SCREEN_LEN, dtype=bool)
+        cands, changed = self.pieces(cur, care, None)
+        order = sorted(cands, key=lambda x: x[0]) if (wipe or changed.mean() > 0.5) else \
+            sorted(cands, key=lambda x: (-x[2], x[0]))
+        starts = [LINE_A + 128 * y for y, _ in ops]
+        capacity = sum(b - a for a, b in zip([24] + [x + PAL_OP for x in starts], starts + [LINE_END]))
+        chosen, spent = [], 0
+        for s0, e0, w, est in order:
+            if spent + est > 0.8 * capacity:
+                continue
+            chosen.append((s0, e0))
+            spent += est
+        chunks = []
+        for s0, e0 in sorted(chosen):
+            for a in range(s0, e0, CHAIN):
+                chunks.append([a, min(a + CHAIN, e0)])
+        out, page, t = bytearray(), PLAYER >> 8, 0
+        done = []
+
+        def emit_pad(r):
+            nonlocal t
+            while r:
+                c = min(r, PAD_MAX)
+                if 0 < r - c < PAD_MIN:
+                    c = r - PAD_MIN
+                out.extend((SPECIAL_LO[page], pad_y(c)))
+                t += c
+                r -= c
+
+        out.extend((SETPG_LO[page], BLOCK_AT[0] >> 8))              # leave the player's page
+        page, t = BLOCK_AT[0] >> 8, 24
+        ci = 0
+        for g in range(len(ops) + 1):
+            until = starts[g] if g < len(ops) else (LINE_END - SETPAGE - END) & ~1
+            while ci < len(chunks):
+                a, e = chunks[ci]
+                addr0 = SCREEN + a
+                pg = entry(addr0, 1) >> 8                           # the chain's page, for 1 byte
+                n = e - a
+                fit = 0
+                for k in range(n, 0, -1):
+                    ent = entry(SCREEN + e - k, k)
+                    c = (SETPAGE if ent >> 8 != page else 0) + PIECE + k * COPY
+                    r = until - t - c
+                    if r == 0 or r >= PAD_MIN:
+                        fit = k
+                        break
+                if not fit:
+                    break
+                k = fit
+                ent = entry(SCREEN + e - k, k)
+                if ent >> 8 != page:
+                    out.extend((SETPG_LO[page], ent >> 8))
+                    page = ent >> 8
+                    t += SETPAGE
+                out.extend((ent & 255, (SCREEN + e - k) & 255))
+                out.extend(cur[e - k:e][::-1])
+                t += PIECE + k * COPY
+                done.append((e - k, e))
+                if k == n:
+                    ci += 1
+                else:
+                    chunks[ci][1] = e - k                              # the rest, later
+            emit_pad(until - t)
+            if g < len(ops):
+                out.extend((SPECIAL_LO[page], ops[g][1]))
+                t += PAL_OP
+        if page != PLAYER >> 8:
+            out.extend((SETPG_LO[page], PLAYER >> 8))
+            t += SETPAGE
+        out.extend((L["endf"] & 255, 0))
+        t += END
+        for a, e in done:
+            self.mem[a:e] = cur[a:e]
+            self.known[a:e] = True
+            self.age[a:e] = 0
+        left = int((changed & (np.frombuffer(self.mem, dtype=np.uint8) != np.frombuffer(cur, dtype=np.uint8))).sum())
+        return bytes(out), t, int(changed.sum()), left
+
+
 PREDRAW = 12          # MODE 7 frames during which the next mode's first frame is drawn out of sight
 
 
-def encode_all(path, plan, start, fps, budget, log=print):
+def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=None):
     """The whole stream for the plan [(mode, seconds), ...], and a report per mode.  A frame's
     header carries the vsyncs to wait for before it: the frame before it has that long to
     draw.  A mode change gets 40 ms: a CRTC change costs a field, after which its frame has one;
@@ -495,7 +722,7 @@ def encode_all(path, plan, start, fps, budget, log=print):
     data, at, report = bytearray(), start, []
     gens = []
     for mode, secs in plan:
-        gens.append(targets(path, mode, at, secs, fps, table))
+        gens.append(targets_lines(path, at, secs, fps) if lines and mode == 1 else targets(path, mode, at, secs, fps, table))
         at += secs
     for i, (mode, secs) in enumerate(plan):
         m = MODES[mode]
@@ -513,7 +740,9 @@ def encode_all(path, plan, start, fps, budget, log=print):
         data += bytes((NEWMODE, (MODE_TABLE[mode] + 1) | (CRTC_TOO if crtc else 0)))
         switch = ivl if crtc else 2 * ivl                  # a CRTC change costs a field; else 40 ms to draw in
         n, backlog, size0 = 0, [], len(data)
-        for k, (cut, pal, cur_part) in enumerate(frames):
+        for k, fr in enumerate(frames):
+            cut, pal, cur_part = fr[:3]
+            line_ops = fr[3] if len(fr) > 3 and k > 0 else None     # the first frame has the mode change's time
             cur = bytearray(screen.mem)
             cur[m["at"]:m["at"] + m["size"]] = cur_part
             fcare, low = care, None
@@ -524,13 +753,18 @@ def encode_all(path, plan, start, fps, budget, log=print):
                 low[:m["at"]] = True
             vsyncs = switch if k == 0 else ivl
             frame_budget = vsyncs * CYCLES_PER_VSYNC * budget - (PALETTE if pal else 0) - (MODESET if k == 0 else 0)
-            codes, cost, changed, left = screen.encode(bytes(cur), frame_budget, fcare, low, wipe=cut)
+            if line_ops is not None:
+                codes, cost, changed, left = screen.encode_lines(bytes(cur), line_ops, wipe=cut)
+            else:
+                codes, cost, changed, left = screen.encode(bytes(cur), frame_budget, fcare, low, wipe=cut)
             data.append((switch if k == 1 else ivl) | (0x80 if pal else 0))
             if pal:
                 data += pal
             data += codes
             n += 1
             backlog.append(left)
+            if on_frame:
+                on_frame(mode, k, bytes(screen.mem), pal, fr[4] if line_ops is not None else None)
             if n % 250 == 0:
                 log(f"  MODE {mode}: {n} frames, {(len(data) - size0) // 1024} KB")
         report.append((mode, n, len(data) - size0, np.array(backlog)))
@@ -548,6 +782,7 @@ def main():
     ap.add_argument("--budget", type=float, default=0.99, help="the share of a vsync's cycles a frame may take")
     ap.add_argument("--encode-only", action="store_true")
     ap.add_argument("--no-cache", action="store_true")
+    ap.add_argument("--lines", action="store_true", help="MODE 1 with a palette for every line")
     o = ap.parse_args()
     plan = [(int(m), float(s)) for m, s in (p.split(":") for p in o.plan.split(","))]
     shows = []
@@ -555,14 +790,14 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}.v2.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L3' if o.lines else ''}.v2.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
             print(f"encoded already: {cache}")
         else:
             t = time.monotonic()
-            data, report = encode_all(video, plan, start, o.fps, o.budget)
+            data, report = encode_all(video, plan, start, o.fps, o.budget, lines=o.lines)
             print(f"encoded {video} from {start:g} s in {time.monotonic() - t:.0f} s")
             with open(cache, "wb") as f:
                 pickle.dump((data, report), f)
@@ -591,6 +826,9 @@ def main():
             print(f"uploaded in {up:.1f} s ({len(data) / max(up, 1e-3) / 1024:.0f} KB/s)", flush=True)
             bbc.poke(PLAYER, MAIN_CODE)
             bbc.poke(BLOCKS, BLOCKS_CODE)
+            bbc.poke(SPECIAL, SPECIAL_CODE)
+            bbc.poke(PALTAB, PALTAB_CODE)
+            bbc.poke(0x76, bytes((0, SPECIAL >> 8)))           # the pads' jump: JMP (&0076)
             was = bbc.status()["read"]
             bbc.type(f"CALL &{PLAYER:X}\r", wait=False)          # the player takes the machine over
             while bbc.status()["read"] == was:                     # until it has started
