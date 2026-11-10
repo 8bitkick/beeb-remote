@@ -330,7 +330,7 @@ PIVOT = {7: 0.5, 0: 0.58, 1: 0.5, 2: 0.5}    # the grey that stays put: above th
 # --lines: a gentler curve (eight colours to dither with need less help), and a pale or dark
 # scene not stretched to the full range (a pale sky would go saturated blue)
 LINES_LEVELS = dict(black=0.06, contrast=0.9, least=0.8)
-LINES_GAMMA = 1.8          # the colours are chosen nearer linear light: a dither mixes light, so half
+LINES_GAMMA = 1.5          # the colours are chosen nearer linear light: a dither mixes light, so half
                            # white and half black looks a light grey, not a middle one
 
 
@@ -484,6 +484,44 @@ LINE_CARRY = 0.4           # how much of a line's error the next line down takes
                            # into colours neither has, a dither down the screen as well as across
 
 
+def blue_noise(n=64, sigma=1.9, seed=7):
+    """A blue-noise threshold map (Ulichney's void and cluster, 1993): n x n, values 0 to 1."""
+    rng = np.random.default_rng(seed)
+    dd = np.minimum(np.arange(n), n - np.arange(n))
+    k = np.exp(-(dd[:, None] ** 2 + dd[None, :] ** 2) / (2 * sigma ** 2))
+    kf = np.fft.rfft2(k)
+    energy = lambda p: np.fft.irfft2(np.fft.rfft2(p) * kf, s=(n, n))
+    p = (rng.random((n, n)) < 0.1).astype(float)
+    while True:
+        e = energy(p)
+        c = np.unravel_index(np.argmax(np.where(p > 0, e, -np.inf)), p.shape)
+        p[c] = 0
+        e = energy(p)
+        v = np.unravel_index(np.argmin(np.where(p > 0, np.inf, e)), p.shape)
+        if v == c:
+            p[c] = 1
+            break
+        p[v] = 1
+    rank = np.zeros((n, n), int)
+    ones = int(p.sum())
+    q, e = p.copy(), energy(p)
+    for r in range(ones - 1, -1, -1):
+        c = np.unravel_index(np.argmax(np.where(q > 0, e, -np.inf)), q.shape)
+        q[c] = 0
+        e -= np.roll(np.roll(k, c[0], 0), c[1], 1)
+        rank[c] = r
+    q, e = p.copy(), energy(p)
+    for r in range(ones, n * n):
+        v = np.unravel_index(np.argmin(np.where(q > 0, np.inf, e)), q.shape)
+        q[v] = 1
+        e += np.roll(np.roll(k, v[0], 0), v[1], 1)
+        rank[v] = r
+    return (rank + 0.5) / (n * n)
+
+
+LINE_MASK_KIND = "blue"    # the ordered dither's threshold map: "bayer" or "blue"
+
+
 class LinePalettes:
     """For each line in turn, top down: the error carried from the line above added, the best 4
     colours of those at most one colour from the line above's (one palette op), scored on the
@@ -496,7 +534,7 @@ class LinePalettes:
     def __init__(self):
         self.pals = np.zeros((256, 4), int)          # what the screen shows: at first, all black
         self.pix = np.zeros((256, 320), np.uint8)
-        self.t = bayer(256, 320)
+        self.t = bayer(256, 320) if LINE_MASK_KIND == "bayer" else np.tile(blue_noise(), (4, 5))
 
     @staticmethod
     def _next(cur):
@@ -584,6 +622,14 @@ def line_ops(pals):
         if ch:
             ops.append((y, ch[0] * 8 + int(pals[y][ch[0]])))
     return ops
+
+
+def fields(frames, n):
+    """Each picture for n fields: the line colours must be set every field, so a picture shown
+    for two is sent twice, the second time with nothing new but what it couldn't fit."""
+    for cut, rgb in frames:
+        for i in range(n):
+            yield cut and i == 0, rgb, i > 0
 
 
 def frames_lines(path, start, seconds, fps):
@@ -846,6 +892,7 @@ def encode_lines_mode(frames, data, ivl, switch, on_frame=None, log=print):
     age = np.zeros(nrow, int)
     state, known = bytes(SCREEN_LEN), np.zeros(SCREEN_LEN, bool)       # S_k: what frame k shows
     pals_k, k, held_log, tail = lp.pals.copy(), 0, [], []
+    hold = set()
 
     def frame(codes, pals):
         data.append((switch if k == 1 else ivl) | 0x80)
@@ -855,11 +902,16 @@ def encode_lines_mode(frames, data, ivl, switch, on_frame=None, log=print):
     def changes(cur):
         return (np.frombuffer(state, np.uint8) != np.frombuffer(cur, np.uint8)) | ~known
 
-    for cut, rgb in frames:
+    for cut, rgb, *again in frames:
+        again = bool(again and again[0])
+        done_rows = set(range(nrow)) - hold if again else set()   # a repeated picture: only what was held
         ops = [] if k == 0 else line_ops(pals_k)
         end = LINE_END - (MODESET if k == 0 else 0)
         early = (lambda r: 0) if k == 0 else row_drawn
-        pals, pix = lp.plan(rgb, cut)
+        held0 = np.zeros(256, bool)
+        for r in done_rows:
+            held0[8 * r:8 * r + 8] = True
+        pals, pix = lp.plan(rgb, cut, held0)
         ch = changes(bp.pack(pix, 1))
         rows = [r for r in range(nrow) if ch[r * ROW:(r + 1) * ROW].any()]
         cost = {r: row_cost(ch[r * ROW:(r + 1) * ROW]) for r in rows}
@@ -874,7 +926,7 @@ def encode_lines_mode(frames, data, ivl, switch, on_frame=None, log=print):
             if spent + cost[r] <= cap:
                 take.add(r)
                 spent += cost[r]
-        hold = set(rows) - take
+        hold = (set(rows) - take) | done_rows
         while True:
             held = np.zeros(256, bool)
             for r in hold:
@@ -899,6 +951,7 @@ def encode_lines_mode(frames, data, ivl, switch, on_frame=None, log=print):
             known[r * ROW:(r + 1) * ROW] = True
         lp.commit(pals, pix)
         tail = nxt
+        hold -= done_rows                          # (rows already done aren't held, just finished)
         for r in range(nrow):
             age[r] = age[r] + 1 if r in hold else 0
         held_log.append(len(hold))
@@ -924,7 +977,7 @@ def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=
     data, at, report = bytearray(), start, []
     gens = []
     for mode, secs in plan:
-        gens.append(frames_lines(path, at, secs, fps) if lines and mode == 1 else targets(path, mode, at, secs, fps, table))
+        gens.append(fields(frames_lines(path, at, secs, fps), round(50 / fps)) if lines and mode == 1 else targets(path, mode, at, secs, fps, table))
         at += secs
     for i, (mode, secs) in enumerate(plan):
         m = MODES[mode]
@@ -943,7 +996,7 @@ def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=
         switch = ivl if crtc else 2 * ivl                  # a CRTC change costs a field; else 40 ms to draw in
         n, backlog, size0 = 0, [], len(data)
         if lines and mode == 1:
-            n, held = encode_lines_mode(frames, data, ivl, switch, on_frame, log)
+            n, held = encode_lines_mode(frames, data, 1, 1, on_frame, log)     # (every field has its ops)
             report.append((mode, n, len(data) - size0, held * ROW))      # the held rows' bytes
             continue
         for k, fr in enumerate(frames):
@@ -996,7 +1049,7 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L6' if o.lines else ''}.v2.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L8' if o.lines else ''}.v2.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
