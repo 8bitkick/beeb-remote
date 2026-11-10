@@ -1,6 +1,6 @@
 # beeb-remote
 
-A web API for a physical BBC Micro Model B, served by a Pi1MHz on its 1 MHz bus. It can stop
+Example applications build on a web API for a physical BBC Micro Model B, served by a Pi1MHz on its 1 MHz bus. It can stop
 the BBC, read and write its memory, call its code and let it continue. No ROM is needed.
 
 This lets you integrate a physical BBC Micro with anything: web services, AI, databases, other
