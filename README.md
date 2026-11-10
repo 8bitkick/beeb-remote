@@ -53,19 +53,29 @@ each frame down to the mode's pixels and dithers it to the mode's colours. Then 
 bytes that changed, as many as the BBC can copy in a frame. The whole video is uploaded to the
 Pi1MHz first, and a player in the BBC's RAM copies from the Pi1MHz's buffer into screen memory.
 
-| MODE 7: teletext | MODE 0: 2 colours |
-|---|---|
-| <img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="400"> | <img src="images/bbb_mode0.gif" alt="Big Buck Bunny in MODE 0" width="400"> |
-| **MODE 1: a palette for every line** | **MODE 2: 8 colours** |
-| <img src="images/bbb_mode1.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="400"> | <img src="images/bbb_mode2.gif" alt="Big Buck Bunny in MODE 2" width="400"> |
+**MODE 1, with a palette for every line**
 
-*Captured from beebjit running the player and the real Pi1MHz firmware; not yet run on a real
-BBC. Big Buck Bunny (c) Blender Foundation, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/),
-[peach.blender.org](https://peach.blender.org).*
+<img src="images/bbb_mode1.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="640">
+
+**MODE 7**, teletext
+
+<img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="640">
+
+**MODE 0**, 2 colours
+
+<img src="images/bbb_mode0.gif" alt="Big Buck Bunny in MODE 0" width="640">
+
+**MODE 2**, 8 colours
+
+<img src="images/bbb_mode2.gif" alt="Big Buck Bunny in MODE 2" width="640">
+
+*Captured from beebjit running the player and the real Pi1MHz firmware, at 50 frames a second,
+every pixel as the BBC drew it; not yet run on a real BBC. Big Buck Bunny (c) Blender Foundation,
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), [peach.blender.org](https://peach.blender.org).*
 
 ```
 python3 demo50.py ~/Videos/clip.mp4 --plan 7:8,0:8,1:8,2:8      # 8 s in each mode
-python3 demo50.py ~/Videos/bunny.mp4@118 --plan 1:15 --lines    # MODE 1, a palette for every line
+python3 demo50.py ~/Videos/bunny.mp4@120 --plan 1:15 --lines    # MODE 1, a palette for every line
 ```
 
 Run on the Pi 5. Needs ffmpeg and numpy, and Pi1MHz firmware with the stream buffer (see
@@ -89,11 +99,11 @@ Connell's).
 - **Rows wait whole.** A row that doesn't fit in a frame keeps its old bytes and old colours
   until a frame has room. A scene cut wipes in from the top over a few frames, rather than
   showing old bytes through new colours.
-- **The dither** is ordered, with a blue-noise map (no cross-hatching), with colours mixed
-  nearer linear light (a dither mixes light: half white, half black looks a light grey).
+- **The dither** is ordered (4x4 Bayer; a blue-noise map is there too, `LINE_MASK_KIND`), with
+  colours mixed nearer linear light (a dither mixes light: half white, half black looks a light
+  grey).
 - **The encoder sends as little as it can.** A pixel keeps its colour while it's still close
-  enough, and lines pass only a little of their error to the line below, so a change in one
-  part of the picture doesn't ripple down the screen.
+  enough, so fewer bytes change from frame to frame.
 
 The encoder knows every op's cost to the cycle, and every frame of the capture above was checked
 in beebjit against what the encoder meant, pixel for pixel.
