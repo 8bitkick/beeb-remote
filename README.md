@@ -57,10 +57,6 @@ Pi1MHz first, and a player in the BBC's RAM copies from the Pi1MHz's buffer into
 
 <img src="images/bbb_mode1.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="640">
 
-**MODE 7**, teletext
-
-<img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="640">
-
 **MODE 0**, 2 colours
 
 <img src="images/bbb_mode0.gif" alt="Big Buck Bunny in MODE 0" width="640">
