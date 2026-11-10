@@ -440,7 +440,12 @@ def targets(path, mode, start, seconds, fps, table):
     """For each frame: (cut, the palette's 16 bytes or None, the bytes for the mode's part of
     screen memory)."""
     m = MODES[mode]
-    smooth, levels, palette = Smooth(), Levels(mode), Palette(2 if mode == 0 else 4) if mode != 2 else None
+    smooth, levels, palette = Smooth(), Levels(mode), Palette(4) if mode == 1 else None
+    if mode == 0:                                  # MODE 0: black and white, always
+        first = [True]
+        def palette(rgb, cut):
+            was, first[0] = first[0], False
+            return (0, 7), was
     colour, colour_since = 7, 0                    # MODE 7: the graphics colour code follows the scene
     last_small, prev_pix, n = None, None, 0
     lum = np.array([0.299, 0.587, 0.114])
@@ -1052,7 +1057,7 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L10' if o.lines else ''}.v2.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L10' if o.lines else ''}.v3.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
