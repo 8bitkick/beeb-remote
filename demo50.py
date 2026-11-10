@@ -728,14 +728,15 @@ class Screen:
     @staticmethod
     def schedule(ops, queue, until_end=LINE_END):
         """One frame's ops: its palette ops (this frame's colours), each started on its cycle,
-        LINE_A + 128 * line from the frame's first op, and the copies in the queue, in
+        LINE_A + 128 * line from the frame's first op (or the cycle given), and the copies in the queue, in
         order, filling the time between.  A queue item [start, end, row, src, early, late]
         copies src[start:end]: not before cycle early (the raster has drawn the row) and
         finishing by late (the raster comes to it), if late isn't None.  Returns (the ops, the
         cycles, the pieces written [(start, end)], what's left of the queue, the rows that
         missed their late)."""
         queue = [list(q) for q in queue]
-        starts = [LINE_A + 128 * y for y, _ in ops]
+        starts = [o[2] if len(o) > 2 else LINE_A + 128 * o[0] for o in ops]     # (line, Y[, cycle])
+        assert all(b - a >= PAL_OP for a, b in zip(starts, starts[1:])), "palette ops overlap"
         out, page, t = bytearray(), PLAYER >> 8, 0
         pieces, failed = [], set()
 
