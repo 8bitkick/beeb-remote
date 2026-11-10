@@ -61,7 +61,7 @@ Pi1MHz first, and a player in the BBC's RAM copies from the Pi1MHz's buffer into
 
 <img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="640">
 
-**MODE 0**, 2 colours
+**MODE 0**, black and white
 
 <img src="images/bbb_mode0.gif" alt="Big Buck Bunny in MODE 0" width="640">
 
@@ -83,7 +83,8 @@ Run on the Pi 5. Needs ffmpeg and numpy, and Pi1MHz firmware with the stream buf
 
 - **MODE 7** draws each frame with teletext characters, text and graphics, whichever fits each
   cell best ([Teletext Express](https://github.com/8bitkick/teletext-express)).
-- **MODE 0 and plain MODE 1** pick the best 2 or 4 of the BBC's 8 colours for each scene.
+- **MODE 0** is black and white.
+- **Plain MODE 1** picks the best 4 of the BBC's 8 colours for each scene.
 - **MODE 2** has all 8.
 
 ### MODE 1 with a palette for every line
