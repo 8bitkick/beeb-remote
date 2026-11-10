@@ -76,10 +76,14 @@ void pi1mhz_attach(struct bbc_struct* p_bbc);
 """ + s[k:]
 open(p, 'w').write(s)
 E
-cp "$SRC"/services_emulator.c "$SRC"/services.h "$SRC"/ramprobe.c "$SRC"/ramprobe.h "$SRC"/ramprobe_api.c "$SRC"/ramprobe_api.h "$SRC"/ramprobe_agent.h "$B/pi/"
+cp "$SRC"/services_emulator.c "$SRC"/services.h "$SRC"/ramprobe.c "$SRC"/ramprobe.h "$SRC"/ramprobe_api.c "$SRC"/ramprobe_api.h "$B/pi/"
+# The probe's 6502 pages: built into the kernel on the ramprobe and stream-buffer branches,
+# helpers 22-24 of 6502code.bin since the PR #51 review (ramprobe-review, stream-review).
+if [ -f "$SRC/ramprobe_agent.h" ]; then cp "$SRC/ramprobe_agent.h" "$B/pi/"; fi
+export RAMPROBE_6502CODE="$SRC/../firmware/Pi1MHz/6502code.bin"
 cp -r "$HERE"/stubs/* "$B/pi/"
 cp "$HERE"/board.h "$HERE"/beebjit_glue.c "$B/pi/"
-printf '#include <stddef.h>\n#include <stdint.h>\nvoid helpers_set_page(uint8_t page, const uint8_t *bytes, size_t length);\n' > "$B/pi/helpers.h"
+printf '#include <stddef.h>\n#include <stdint.h>\nvoid helpers_set_page(uint8_t page, const uint8_t *bytes, size_t length);\nint helpers_page_number(uint8_t page);\n' > "$B/pi/helpers.h"
 # beebjit's own files, as its build_headless_opt.sh lists them, then the board's.
 BJ_FILES=$(sed -n '/-o beebjit/,/-lm/p' "$B/bj/build_headless_opt.sh" | tr -d '\\' | tr ' ' '\n' | grep -E '\.(c|S)$')
 for f in services_emulator ramprobe ramprobe_api; do
@@ -89,6 +93,7 @@ gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w $(grep -q ramprobe_api_buffer "$SRC/rampr
 (cd "$B/bj" && gcc -O2 -g -DNDEBUG -DBEEBJIT_HEADLESS -fno-pie -no-pie -Wa,--noexecstack -w -o "$B/beebjit" \
     $BJ_FILES "$B"/pi/*.o -lm -lpthread) 2> "$B/build.log" || { cat "$B/build.log"; exit 1; }
 cd "$B/bj"
-run() { PI1MHZ_PORT=$1 exec "$B/beebjit" -headless -mode ${BEEBJIT_MODE:-interp} -max-frames 4000000000 -exit-on-max-frames; }
+# BEEBJIT_ARGS: more of beebjit's own, e.g. -frame-cycles N -max-frames M -frames-dir D to save frames
+run() { PI1MHZ_PORT=$1 exec "$B/beebjit" -headless -mode ${BEEBJIT_MODE:-interp} -max-frames 4000000000 -exit-on-max-frames ${BEEBJIT_ARGS:-}; }
 if [ -n "$1" ]; then run "$1"; fi
 echo "usage: run_beebjit.sh PORT"; exit 1
