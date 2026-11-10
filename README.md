@@ -71,6 +71,25 @@ python3 demo50.py ~/Videos/clip.mp4 --plan 7:8,0:8,1:8,2:8      # 8 s in each mo
 Run on the Pi 5. Needs ffmpeg and numpy, and Pi1MHz firmware with the stream buffer (see
 [Setting up](#setting-up)).
 
+### MODE 1 with a palette for every line
+
+With `--lines`, each line of MODE 1 can change one of its four colours from the line above's,
+so the whole screen can show all 8 of the BBC's colours rather than 4. The player writes the
+new colour in the horizontal blank before the line, timed to the cycle. Lines also pass a
+little of their colour error to the line below, so neighbouring lines mix into colours neither
+has. The cost is copying time: on this clip the palette changes take 7% of a frame's copying time
+(21% at most), and fitting the copies around them loses some more, so fast motion smears more.
+
+<img src="images/video_mode1_lines.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="640" height="480">
+
+*Captured from beebjit running the player, every frame checked against what the encoder meant;
+not yet run on a real BBC. Idea from Kieran Connell. Big Buck Bunny (c) Blender Foundation,
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), [peach.blender.org](https://peach.blender.org).*
+
+```
+python3 demo50.py ~/Videos/bunny.mov@8 --plan 1:15 --lines
+```
+
 ## Remote debugging
 
 Stop the BBC at any point, look at its registers and memory, change them, and let it carry on.
