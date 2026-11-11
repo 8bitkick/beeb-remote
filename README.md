@@ -156,7 +156,7 @@ an emulator. Connecting it to a physical BBC Micro through this API is in progre
 Once after switching on, at the `>` prompt:
 
 ```
-X%=24:CALL &FC88
+X%=23:CALL &FC88
 ```
 
 It answers `Pi1MHz probe on`. Soft Break keeps it; Ctrl-Break or power-off removes it, so type
@@ -192,7 +192,7 @@ For video, `pip install numpy` too, and install ffmpeg.
 
 ```
  your computer                     Pi1MHz (Pi Zero 2 W)           BBC Micro Model B
- star_claude.py, demo50.py ...     RAM probe: /bbc routes ──────► small stub at &0D00
+ star_claude.py, demo50.py ...     RAM probe: /bbc routes ──────► hooks in the Pi1MHz's FRED
    bbc.py ──────── HTTP ─────────► halt, peek, poke, call ◄─bus─► the machine
 ```
 

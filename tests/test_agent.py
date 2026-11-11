@@ -136,7 +136,7 @@ try:
 
     print("== the install line, once")
     sim("/sim/type", text=BBC.install_line() + "\r")
-    ok(bbc.ready() and "Pi1MHz probe on" in sim_screen(), "the stub is in, and the BBC says so")
+    ok(bbc.ready() and "Pi1MHz probe on" in sim_screen(), "installed, and the BBC says so")
     sim("/sim/break")
     ok(bbc.ready(), "after a Break it's back by itself")
     ok(bbc.is_model_b(), "and it's a Model B")
@@ -164,8 +164,8 @@ try:
     ok("No such variable at line 20" in r1["content"] and not r1["is_error"], "run 1: the error and its line come back")
     r2 = seen["run2"]
     ok("SQUARE 9" in r2["t2"]["content"].replace("  ", " ") or "SQUARE 9" in " ".join(r2["t2"]["content"].split()), "run 2: the fixed program's output")
-    ok(r2["t3"]["content"] == "8d" and not r2["t3"]["is_error"], f"peek &0D00: {r2['t3']['content']}")
-    ok(r2["t4"]["is_error"] and "stub" in r2["t4"]["content"], "poke on the stub refused")
+    ok(r2["t3"]["content"] == "4c" and not r2["t3"]["is_error"], f"peek &0D00, the probe's JMP: {r2['t3']['content']}")
+    ok(r2["t4"]["is_error"] and "NMI jump" in r2["t4"]["content"], "poke on the probe's NMI jump refused")
     ok(not r2["t5"]["is_error"], "poke &3000 done")
     r3 = seen["run3"]
     ok("SQUARE" in r3["t6"]["content"], "read_screen shows the screen")
@@ -188,7 +188,7 @@ try:
 
     print("== a Break mid-session")
     sim("/sim/break")
-    ok(bbc.ready(), "the stub is back after a Break mid-session")
+    ok(bbc.ready(), "the probe is back after a Break mid-session")
     bbc.type("PRINT 2+2\r")
     time.sleep(0.5)
     ok(bbc.screen().splitlines()[-2].strip() == "4", "and typing works again")

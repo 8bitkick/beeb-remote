@@ -1,7 +1,7 @@
 """A BBC Micro driven over the network through the Pi1MHz RAM probe (Pi1MHz docs/dev/ramprobe.md).
 
 The probe gives five things: stop the machine, read and write its memory, call code, let it go
-on.  Each stop comes in by a rung of its ladder, the gentlest first (see BBC.max_rung).  Everything here is built from those, with no ROM and nothing on the BBC but the probe's stub:
+on.  Each stop comes in by a rung of its ladder, the gentlest first (see BBC.max_rung).  Everything here is built from those, with no ROM and nothing on the BBC but the probe's install:
 
     bbc = BBC("Pi1MHz.local")
     bbc.type("PRINT 6*7\\r")
@@ -20,7 +20,7 @@ MOS120_RESET = 0xD9CD          # the reset vector at &FFFC on a Model B's MOS 1.
 KEYBUF_START, KEYBUF_END = 0x02D8, 0x02E1   # buffer 0's pointers, offsets into page 3
 KEYBUF_FIRST = 0xE0            # the buffer is &03E0-&03FF
 ESCAPE_FLAG = 0xFF             # the OS's escape flag; bit 7 set means Escape was pressed
-INSTALL = "X%=24:CALL &FC88"     # X%=21 on Pi1MHz firmware up to ff13f40
+INSTALL = "X%=23:CALL &FC88"     # the PR #51 probe; X%=24 and X%=21 on older firmware
 
 
 class ProbeError(Exception):
@@ -193,7 +193,7 @@ class BBC:
 
     # ---- the machine -----------------------------------------------------------------
     def ready(self):
-        """True if the stub is in.  Notices a Break: the stub went with it, and the install line
+        """True if the probe is installed.  Notices a Break: the install went with it, and the line
         set *KEY10 to bring it back by itself (see install_line())."""
         s = self.status()
         self._resets = s["resets"]

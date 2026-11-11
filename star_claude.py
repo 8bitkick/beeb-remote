@@ -4,8 +4,8 @@ and this program, watching from another computer, runs Claude on the prompt (age
 
     ANTHROPIC_API_KEY=... python3 star_claude.py --host Pi1MHz.local [--run]
 
-Leave it running.  It puts the hook in (and back after a Break) by itself, once the probe's
-stub is in (X%=24:CALL &FC88).  On the BBC, at the BASIC prompt:
+Leave it running.  It puts the hook in (and back after a Break) by itself, once the probe is
+installed (X%=23:CALL &FC88).  On the BBC, at the BASIC prompt:
 
     *CLAUDE a bouncing ball
 

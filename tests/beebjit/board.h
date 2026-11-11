@@ -75,9 +75,13 @@ void helpers_set_page(uint8_t page, const uint8_t *bytes, size_t length)
 }
 int helpers_page_number(uint8_t page) { return page < 47 ? helper[(page << 8) + 255] : -1; }
 uint8_t Pi1MHz_MemoryRead(uint32_t addr) { return pi.Memory[addr & 0x1ffu]; }
+static int window_page = -1;              /* the helper page the window shows, or -1 */
+int helpers_window_page(void) { return window_page; }
+const uint8_t *helpers_page(uint8_t page) { return page < 47 ? helper + (page << 8) : NULL; }
+void Pi1MHz_EmulatedMemoryByte(unsigned int gpio) { pi.Memory[GET_ADDR(gpio) & 0xffu] = (uint8_t)GET_DATA(gpio); }
 #ifndef RP_PAGES_BUILT_IN
-/* Since the PR #51 review the probe's pages are helpers 22-24 in 6502code.bin, loaded with the
-   other helpers: here from RAMPROBE_6502CODE, which run_beebjit.sh sets. */
+/* Since the PR #51 review the probe's pages are helpers in 6502code.bin (22 and 23 now), loaded
+   with the other helpers: here from RAMPROBE_6502CODE, which run_beebjit.sh sets. */
 static uint8_t code_bin[47 * 256];
 static void load_probe_pages(void)
 {
@@ -137,11 +141,13 @@ static void apply_select(uint8_t data)
       pi.Memory[0x88 + 4] = 0x60;
       memcpy(pi.Memory + 256, pi.JIM_ram + page_addr, 256);
       window_is_helper = false;
+      window_page = -1;
    } else {
       pi.Memory[0x88 + 4] = 0x4C;
       if (data >= sizeof helper >> 8) data = 0;
       memcpy(pi.Memory + 256, helper + (data << 8), 256);
       window_is_helper = true;
+      window_page = data;
    }
 }
 static void settle(void)
@@ -200,6 +206,7 @@ static void board_bus_write(uint16_t a, uint8_t v)
       int sh = r == 0xFF ? 8 : r == 0xFE ? 16 : 24;
       page_addr = ((page_addr & ~(0xFFu << sh)) | ((uint32_t)v << sh)) & 0xFFFFFF;
       window_is_helper = false;
+      window_page = -1;
       memcpy(pi.Memory + 256, pi.JIM_ram + page_addr, 256);
       return;
    }
@@ -218,6 +225,7 @@ static void board_reset(void)
    page_addr = 0;
    pending = -1;
    window_is_helper = false;
+   window_page = -1;
    polls = 0;                          /* init_emulator empties the poll table at every reset */
    services_emulator_init(0, 0xA6);
    board_extra_init();

@@ -4,7 +4,7 @@
     python3 agent.py --host Pi1MHz.local "a bouncing ball"
 
 Claude tests its program on the BBC (typing it in, running it, reading the screen), then the final
-program is typed in, ready for RUN.  Needs the probe's stub in the BBC (bbc.py, install_line()),
+program is typed in, ready for RUN.  Needs the probe installed on the BBC (bbc.py, install_line()),
 and Anthropic credentials: ANTHROPIC_API_KEY, or a profile from `ant auth login`.
 """
 import argparse
@@ -104,7 +104,7 @@ TOOLS = [
     {
         "name": "poke_memory",
         "description": "Write bytes into the BBC's main memory, &0000-&7FFF, apart from the stack (&100-&1FF) "
-                       "and the probe's stub (&D00-&D7F).",
+                       "and the probe's NMI jump (&D00-&D02).",
         "strict": True,
         "input_schema": {
             "type": "object",
@@ -194,8 +194,8 @@ def run_tool(bbc, name, args, show=None):
             except ValueError:
                 return "hex must be pairs of hex digits", True
             end = addr + len(data)
-            if not data or not (0 <= addr and end <= 0x8000) or (addr < 0x200 and end > 0x100) or (addr < 0xD80 and end > 0xD00):
-                return "only &0000-&7FFF, and not the stack (&100-&1FF) or the probe's stub (&D00-&D7F)", True
+            if not data or not (0 <= addr and end <= 0x8000) or (addr < 0x200 and end > 0x100) or (addr < 0xD03 and end > 0xD00):
+                return "only &0000-&7FFF, and not the stack (&100-&1FF) or the probe's NMI jump (&D00-&D02)", True
             with bbc.stopped():
                 bbc.poke(addr, data)
             return f"wrote {len(data)} bytes at &{addr:04X}", False

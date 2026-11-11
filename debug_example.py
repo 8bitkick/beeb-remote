@@ -4,7 +4,7 @@ BASIC variable, change the variable, write onto the screen, and let it carry on.
 
     python3 debug_example.py --host Pi1MHz.local
 
-Needs the probe installed on the BBC (X%=24:CALL &FC88), in BASIC at the > prompt.
+Needs the probe installed on the BBC (X%=23:CALL &FC88), in BASIC at the > prompt.
 """
 import argparse
 import time
