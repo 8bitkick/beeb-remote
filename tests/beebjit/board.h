@@ -134,9 +134,27 @@ static void board_extra_init(void) {}
 static void board_extra_init(void);
 #endif
 
-/* helpers_bank_select, for a helper page or for &FF (JIM RAM again). */
+/* helpers_bank_select, for a helper page, &FF (JIM RAM again) or &FD: back to what the select
+   of page 22, the probe's agent, replaced (a helper page with what the Beeb wrote into it).
+   No transfer page here. */
+static uint8_t sel = 0xFF, stopped = 0xFF, stopped_page[256];
 static void apply_select(uint8_t data)
 {
+   if (data == 0xFD) {
+      data = stopped;
+      stopped = 0xFF;
+      if (data < 47) {
+         pi.Memory[0x88 + 4] = 0x4C;
+         memcpy(pi.Memory + 256, stopped_page, 256);
+         window_is_helper = true;
+         sel = data;
+         window_page = data;
+         return;
+      }
+   } else if (data == 22) {
+      stopped = window_is_helper ? sel : 0xFF;
+      if (stopped < 47) memcpy(stopped_page, pi.Memory + 256, 256);
+   }
    if (data == 0xFF) {
       pi.Memory[0x88 + 4] = 0x60;
       memcpy(pi.Memory + 256, pi.JIM_ram + page_addr, 256);
@@ -145,6 +163,7 @@ static void apply_select(uint8_t data)
    } else {
       pi.Memory[0x88 + 4] = 0x4C;
       if (data >= sizeof helper >> 8) data = 0;
+      sel = data;
       memcpy(pi.Memory + 256, helper + (data << 8), 256);
       window_is_helper = true;
       window_page = data;
@@ -226,6 +245,7 @@ static void board_reset(void)
    pending = -1;
    window_is_helper = false;
    window_page = -1;
+   sel = stopped = 0xFF;
    polls = 0;                          /* init_emulator empties the poll table at every reset */
    services_emulator_init(0, 0xA6);
    board_extra_init();
