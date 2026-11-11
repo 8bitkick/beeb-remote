@@ -13,10 +13,9 @@ from bbc import BBC
 
 ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
 ap.add_argument("--host", default="Pi1MHz.local")
-ap.add_argument("--token", help="the probe's probe_token, if set")
 o = ap.parse_args()
 
-bbc = BBC(o.host, token=o.token, max_rung=1)
+bbc = BBC(o.host, max_rung=1)
 
 # A program to look into: it counts in I% forever.
 bbc.type('NEW\r10 MODE 7\r20 REPEAT:I%=I%+1:PRINT TAB(4,4)"Counting: ";I%:UNTIL FALSE\rI%=0:RUN\r')

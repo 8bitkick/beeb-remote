@@ -55,13 +55,12 @@ void Pi1MHz_nIRQ_ASSERT(uint8_t src) { irq_sources |= 1u << src; board_irq_line(
 void Pi1MHz_nIRQ_CLEAR(uint8_t src) { irq_sources &= ~(1u << src); board_irq_line(irq_sources != 0u); }
 void Pi1MHz_SetnNMI(bool nmi) { board_nmi_line(nmi); }
 void fat_service_init(void) {}
-static const char *api_token;
 #ifdef BOARD_EXTRA
 static const char *board_config(const char *key);
 #else
 static const char *board_config(const char *key) { (void)key; return NULL; }
 #endif
-const char *config_get(const char *key) { return !strcmp(key, "probe_token") ? api_token : board_config(key); }
+const char *config_get(const char *key) { return board_config(key); }
 /* config.c's, for the values the tests use: absent or empty is dflt, 0/n/f/off false, else true. */
 bool config_get_flag(const char *key, bool dflt)
 {

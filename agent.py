@@ -275,14 +275,13 @@ def type_final(bbc, text, log=print, run=False):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="Pi1MHz.local")
-    ap.add_argument("--token", help="the probe's probe_token, if set")
     ap.add_argument("--no-type", action="store_true", help="don't type the final program in")
     ap.add_argument("--run", action="store_true", help="and RUN it once it's typed")
     ap.add_argument("--max-rung", type=int, default=1, choices=(0, 1, 2),
                     help="the probe's ladder: 2 allows an NMI, the last resort (default 1: never)")
     ap.add_argument("prompt")
     o = ap.parse_args()
-    bbc = BBC(o.host, o.token, max_rung=o.max_rung)
+    bbc = BBC(o.host, max_rung=o.max_rung)
     try:
         if not bbc.ready():
             print(f"The probe isn't in the BBC. Type this on the BBC, once after switching it on:\n  {BBC.install_line()}")

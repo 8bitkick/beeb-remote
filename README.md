@@ -163,8 +163,8 @@ It answers `Pi1MHz probe on`. Soft Break keeps it; Ctrl-Break or power-off remov
 it again after those.
 
 > **This opens the BBC to remote code execution over your WiFi network** until Ctrl-Break or
-> power-off. Use it on your own network. `probe_token` in `Pi1MHz.cfg` asks for a word on every
-> request; pass it with `--token`.
+> power-off. There's no password, as the Pi1MHz's web pages are served in the clear: use it on
+> a network you trust, and `ramprobe_addr=-1` in `Pi1MHz.cfg` turns the probe off.
 
 ### On the Pi 5 (or any computer on the network)
 

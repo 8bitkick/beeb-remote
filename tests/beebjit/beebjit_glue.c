@@ -7,7 +7,6 @@
      POST /sim/type?text=PRINT+1%0D   keys, typed at about 10 a second; answers when done
      GET  /sim/screen                 the MODE 7 screen, as text
      POST /sim/break[?ctrl=1]         Break (Ctrl-Break); answers 3 s later
-     POST /sim/config?token=WORD      probe_token; empty for none
      POST /sim/quit
    The port is PI1MHZ_PORT in the environment. */
 #include <arpa/inet.h>
@@ -32,7 +31,6 @@ static struct bbc_struct *bbc;
 static struct timing_struct *timing;
 static uint32_t timer;
 static int listener = -1;
-static char token[64];
 
 static uint32_t ticks(void) { return timing != NULL ? (uint32_t)timing_get_total_timer_ticks(timing) : 0u; }
 
@@ -230,13 +228,6 @@ static bool sim_route(int fd, bool post, const char *path, const char *query)
       } else soft_break();
       waiting_fd = fd; waiting_for_keys = false; waiting_until = Pi1MHz_now_us + 3000000u;
       return false;
-   }
-   if (post && !strcmp(path, "/sim/config")) {
-      token[0] = 0;
-      (void)value(query, "token", token, sizeof token);
-      api_token = token;
-      reply(fd, 200, "{}\n");
-      return true;
    }
    if (post && !strcmp(path, "/sim/quit")) { reply(fd, 200, "{}\n"); exit(0); }
    reply(fd, 404, "No such page.\n");

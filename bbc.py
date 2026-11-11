@@ -37,10 +37,9 @@ class BBC:
     resort, for a BBC that won't answer otherwise (and on some BBCs it clicks the cassette
     relay); 2 allows it; 0 only the vsync event."""
 
-    def __init__(self, host, token=None, timeout=10.0, max_rung=1, retry_after=None):
+    def __init__(self, host, timeout=10.0, max_rung=1, retry_after=None):
         self.base = f"http://{host}"
         self.host = host
-        self.token = token
         self._conn = None               # one connection, kept open between requests
         self._api = None                # the probe's api: 2 takes wait=1 and poke bodies
         # retry_after: a request with no answer in this many seconds is sent again on a fresh
@@ -59,8 +58,6 @@ class BBC:
         """One request on the kept-open connection (HTTP/1.1 keep-alive: a new TCP connection
         for every request cost more than the request).  A connection the Pi has since closed
         (it drops idle ones after ~30 s) is opened again, once."""
-        if self.token:
-            params["token"] = self.token
         query = urllib.parse.urlencode(params)
         url = path + (f"?{query}" if query else "")
         tries = 6 if self.retry_after else 2

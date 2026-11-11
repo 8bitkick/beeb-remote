@@ -242,13 +242,12 @@ class Watcher:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="Pi1MHz.local")
-    ap.add_argument("--token", help="the probe's probe_token, if set")
     ap.add_argument("--run", action="store_true", help="RUN each program once it's typed")
     ap.add_argument("--echo", action="store_true", help="no Claude: show each prompt on the BBC (a test)")
     ap.add_argument("--max-rung", type=int, default=1, choices=(0, 1, 2),
                     help="the probe's ladder: 2 allows an NMI, the last resort (default 1: never)")
     o = ap.parse_args()
-    bbc = BBC(o.host, o.token, max_rung=o.max_rung)
+    bbc = BBC(o.host, max_rung=o.max_rung)
     if o.echo:
         import teletext
 
