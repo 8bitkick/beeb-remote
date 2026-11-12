@@ -1086,6 +1086,10 @@ def main():
             print(f"The probe isn't in: type {BBC.install_line()} on the BBC")
             return 1
         secs = sum(s for _, s in plan)
+        # The player's line palette and pads go over &0B00, where the OS keeps the *KEY strings
+        # (the probe's install puts its *KEY10 there, for a soft Break), and its palette table
+        # over &0C00 (user-defined characters).  Both are put back once the player has returned.
+        kept = {SPECIAL: bbc.peek(SPECIAL, 0x100), PALTAB: bbc.peek(PALTAB, len(PALTAB_CODE))}
         for i, (data, report) in enumerate(shows):
             t = time.monotonic()
             bbc._request("/bbc/buffer", post=True, body=data, offset=0)
@@ -1110,6 +1114,8 @@ def main():
             print(f"the BBC took {el:.1f} s for {total} frames ({total / el:.1f} a second)")
             counters = bbc.peek(L["frames"], 3)
             print(f"the player counted {counters[0] | counters[1] << 8} frames, {counters[2]} started late", flush=True)
+        for at, was in kept.items():
+            bbc.poke(at, was)
     except ProbeError as e:
         print(e)
         return 1
