@@ -111,12 +111,12 @@ same `keyq` as `run_sim`, timed in those frames, and the player runs once a fram
 
 On a real Model B it has played with no stops in flight, made a commander Deadly and made kills in
 witchspace. Measured on beebjit (Model B, MOS 1.20, DFS 0.90 on the 8271) with the probe's firmware on its test
-board (`tests/beebjit`), over careers of 35 to 40 game minutes:
+board (`tests/beebjit`), over careers of 35 game minutes:
 
 | | |
 |---|---|
-| Stops | 0.03-0.08 a second over a career (1 every 15-30 s): a check and a patch at each code load, a stop for each line typed, a check now and then in a spell without copies (a hyperspace, a save), and a few at the boot |
-| Time the BBC is stopped | 0.07-0.15% (the longest stop 30-46 ms, at a patch) |
+| Stops | 0.02 a second over a career (one every 50 s): a check and a patch at each code load (about 6 s after the last copy, as long as the 8271 takes to load a code), a stop for each line typed (a commander's name, a system's), a check now and then in a spell without copies, and a few at the boot |
+| Time the BBC is stopped | 0.08% (the longest stop 46-58 ms on beebjit, at a patch) |
 | Stops in quiet flight and in fights | none |
 | Copies | about 12 a second (one each main-loop iteration), 3-6% of fetches mid-copy (fetched again a frame later) |
 | Game speed | the wall's, less the stops: 35.0 game minutes in 35.0 wall minutes; the copy itself takes 3-6% of the 6502 (below) |
