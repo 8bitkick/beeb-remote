@@ -144,11 +144,11 @@ an emulator. Connecting it to a physical BBC Micro through this API is in progre
 
 - **A BBC Micro Model B** (MOS 1.20). Typing at the keyboard is Model B only for now.
 - **A Pi1MHz** on the 1 MHz bus, on your WiFi, running firmware with the **RAM probe**: the
-  [`ramprobe-review`](https://github.com/8bitkick/Pi1MHz/tree/ramprobe-review) branch of
+  [`ramprobe-fixes`](https://github.com/8bitkick/Pi1MHz/tree/ramprobe-fixes) branch of
   8bitkick/Pi1MHz, the probe as proposed upstream in [dp111/Pi1MHz#51](https://github.com/dp111/Pi1MHz/pull/51)
   with that review's changes. Video also needs the stream buffer:
-  [`stream-review`](https://github.com/8bitkick/Pi1MHz/tree/stream-review), one commit on top of
-  `ramprobe-review`. Put that build's `Pi1MHz/6502code.bin` on the SD card with the kernel.
+  [`stream-fixes`](https://github.com/8bitkick/Pi1MHz/tree/stream-fixes), one commit on top of
+  `ramprobe-fixes`. Put that build's `Pi1MHz/6502code.bin` on the SD card with the kernel.
 - **Another computer on the same network** with Python 3: a Raspberry Pi 5 works well.
 
 ### On the BBC
@@ -214,7 +214,7 @@ screen reads MODE 7's screen memory; Escape sets the OS's escape flag.
 `tests/` builds [beebjit](https://github.com/scarybeasts/beebjit) with the real Pi1MHz probe
 firmware patched in (`tests/beebjit/`), boots a Model B, and runs the clients against it over
 HTTP, with a scripted model in place of Claude. No API key needed. It wants a Pi1MHz checkout on
-the `ramprobe-review` or `stream-review` branch in `PI1MHZ` (default `~/Pi1MHz`) and a beebjit checkout
+the `ramprobe-fixes` or `stream-fixes` branch in `PI1MHZ` (default `~/Pi1MHz`) and a beebjit checkout
 in `BEEBJIT`.
 
 ```
@@ -230,9 +230,9 @@ Stop the BBC, read and write its memory, call its code, and let it carry on:
 
 | Route | What it does | In `bbc.py` |
 |---|---|---|
-| `GET /bbc` | State: running or halted, the stopped registers, the last error | `status()` |
+| `GET /bbc` | State: running or halted, the stopped registers (`null` after a rung 0 stop), the last error | `status()` |
 | `POST /bbc/halt?rung=` | Stop the BBC (by the vsync event, an IRQ or an NMI) | `halt()`, `stopped()` |
-| `POST /bbc/continue?pc=&a=&x=&y=&p=` | Let it go on, each register optional | `go()` |
+| `POST /bbc/continue?pc=&a=&x=&y=&p=` | Let it go on, each register optional; none can be set after a rung 0 stop, which is inside the OS | `go()`; `halt(regs=True)` skips rung 0 |
 | `POST /bbc/peek?addr=&len=&bank=` | Read up to 64 KB, sideways banks too | `peek()` |
 | `GET /bbc/data?offset=&len=` | The bytes the last peek read | `peek()` |
 | `POST /bbc/poke?addr=&hex=` | Write up to 32 KB | `poke()` |
@@ -252,7 +252,7 @@ curl "http://Pi1MHz.local/bbc/data?offset=0&len=5"        # 48454C4C4F
 In Python, `bbc.py` wraps these for you, and on top of them types at the keyboard (`type()`), reads the MODE 7 screen
 (`screen()`), presses Escape (`escape()`) and runs BASIC programs (`run_basic()`).
 
-The Pi1MHz's [`docs/dev/ramprobe.md`](https://github.com/8bitkick/Pi1MHz/blob/ramprobe/docs/dev/ramprobe.md) has the details.
+The Pi1MHz's [`docs/dev/ramprobe.md`](https://github.com/8bitkick/Pi1MHz/blob/ramprobe-fixes/docs/dev/ramprobe.md) has the details.
 
 ## Licence
 
