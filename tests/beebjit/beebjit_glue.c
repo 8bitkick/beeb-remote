@@ -287,7 +287,7 @@ static void answer(int fd)
       uint8_t *dest = NULL;
       int st = ramprobe_api_shared(q, cl > 0 ? (size_t)cl : 0u, &dest, bout, sizeof bout);
       if (st == 200 && board_read_body(fd, req, got, dest, (size_t)cl) == cl)
-         st = ramprobe_api_status(bout, sizeof bout);
+         snprintf(bout, sizeof bout, "{\"written\":%ld}\n", cl);
       else if (st == 200) { st = 400; snprintf(bout, sizeof bout, "{\"error\":\"short body\"}\n"); }
       char head[160];
       int h = snprintf(head, sizeof head, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",

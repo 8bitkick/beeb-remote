@@ -181,7 +181,7 @@ static void resume(void) {
     if (t > s_stop_longest) s_stop_longest = t;
 }
 
-// bytes from the probe's transfer buffer, from offset (GET /bbc/data, which serves the last peek's
+// bytes from the probe's data buffer, from offset (GET /bbc/data, which serves the last peek's
 // bytes, up to its length): 0, or -1
 static int data(int offset, int total, uint8_t *out) {
     static char hex[8200];
@@ -641,6 +641,28 @@ static void check_and_patch(void) {
         }
     }
     if (nw && poke_how(w, nw, bytes, err, sizeof err, 1)) fprintf(stderr, "patch: %s\n", err), routine = dks4 = 0;
+    // CMDR=file: a commander save (a .cmdr, the 74 bytes Elite saves) into NA%'s copy, in the same
+    // stop as the docked code's first patch.  The title's "Load New Commander (Y/N)?" N then
+    // restores it, Elite setting it all up.  Its checksum goes with it, CHK at &11D4 and CHK2 (CHK
+    // EOR &A9) at &11D3, made as Elite's CHECK makes it (X = &49 down to 1: A = A + byte X-1 + C,
+    // EOR byte X); the title hangs on a mismatch.
+    static int cmdr_done;
+    if (c == 1 && routine && !cmdr_done && getenv("CMDR")) {
+        FILE *cf = fopen(getenv("CMDR"), "rb");
+        uint8_t blk[76];
+        if (cf && fread(blk, 1, 74, cf) == 74 && !(blk[0] & 0x80)) {
+            unsigned a = 0x49, carry = 0;
+            for (int x = 0x49; x > 0; x--) {
+                unsigned sum = a + blk[x - 1] + carry;
+                a = (sum & 0xFF) ^ blk[x], carry = sum >> 8;
+            }
+            blk[74] = (uint8_t) (a ^ 0xA9), blk[75] = (uint8_t) a;
+            range_t cr = {0x1181 + 8, 76};
+            if (poke_how(&cr, 1, blk, err, sizeof err, 1)) fprintf(stderr, "commander: %s\n", err);
+            else cmdr_done = 1, printf("        the commander from %s into NA%% (tally %d)\n", getenv("CMDR"), blk[71] | blk[72] << 8);
+        }
+        if (cf) fclose(cf);
+    }
     resume();
     if (c >= 0) {
         if (routine || patched[c]) {

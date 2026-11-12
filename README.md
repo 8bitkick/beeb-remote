@@ -1,7 +1,7 @@
 # beeb-remote
 
 Example applications built on a web API for a physical BBC Micro Model B, served by a Pi1MHz on its 1 MHz bus. It can stop
-the BBC, read and write its memory, call its code and let it continue, and it shares 8 MB of
+the BBC, read and write its memory, call its code and let it continue, and it shares 4 MB of
 memory with programs running on the BBC, which both sides use without stopping. No ROM is needed.
 
 This lets you integrate a physical BBC Micro with anything: web services, AI, databases, other
@@ -96,7 +96,10 @@ python3 demo50.py ~/Videos/clip.mp4 --plan 7:8,0:8,1:8,2:8      # 8 s in each mo
 python3 demo50.py ~/Videos/bunny.mp4@120 --plan 1:15 --lines    # MODE 1, a palette for every line
 ```
 
-Run on the Pi 5. Needs ffmpeg and numpy.
+Run on the Pi 5. Needs ffmpeg and numpy. A show must fit in shared memory, 4 MB; demo50 says
+so if it doesn't. Afterwards it puts back the
+RAM the player used (the `*KEY` strings, BASIC's program, and MMFS's workspace at `&0E00`), so
+the filing system and BASIC carry on.
 
 - **MODE 7** draws each frame with teletext characters, text and graphics, whichever fits each
   cell best ([Teletext Express](https://github.com/8bitkick/teletext-express)).
@@ -243,7 +246,7 @@ For video, `pip install numpy` too, and install ffmpeg.
  your computer                Pi1MHz (Pi Zero 2 W)                  BBC Micro Model B
  star_claude.py, demo50.py    /bbc routes
    bbc.py ───── HTTP ───────► stops: halt, peek, poke, call ◄─bus─► the probe's hooks, by IRQ or vsync
-                              shared memory, 8 MB          ◄─bus─► your code, through JIM
+                              shared memory, 4 MB          ◄─bus─► your code, through JIM
 ```
 
 **Stops, for an occasional look.** The probe stops the BBC, reads or writes its memory, and lets
@@ -252,7 +255,7 @@ with `max_rung=2`. A stop and go takes 4 ms on a Model B. That suits a debugger,
 or reading the screen now and then. Typing writes into MOS 1.20's keyboard buffer during a stop;
 reading the screen reads MODE 7's screen memory; Escape sets the OS's escape flag.
 
-**Shared memory, for a live remote application.** The Pi1MHz has 8 MB that both sides use while
+**Shared memory, for a live remote application.** The Pi1MHz has 4 MB that both sides use while
 the BBC runs. The application writes and reads it over HTTP (`POST` and `GET /bbc/shared`), with
 no stop. Its own code on the BBC reaches it through the Pi1MHz's services port (`&FCA6-&FCA9`: an
 address, then a data register that moves on by itself), or a page at a time through the `&FD00`
@@ -265,14 +268,14 @@ no stops at all.
 
 ### The memory map
 
-The probe's memory is in the Pi1MHz's services area. `GET /bbc` gives each part's address, so
-clients don't hard-code them:
+The probe's memory is in the Pi1MHz's services area. `GET /bbc` gives shared memory's place and the
+probe's registers' (its data buffer follows them), so clients don't hard-code them:
 
 | Services offset | Name | Owner | What |
 |---|---|---|---|
-| `&400000-&BFFFFF` | shared memory | remote applications | 8 MB, written over HTTP and by the BBC's own code, with no stop |
-| `&C00000-&C0FFFF` | transfer buffer | the probe | the bytes of the last peek or poke, 64 KB |
-| `&C10000-&C100FF` | stopped registers | the probe | the stopped machine's registers, the call result and the install marker |
+| `&800000-&BFFFFF` | shared memory | remote applications | 4 MB, written over HTTP and by the BBC's own code, with no stop: the services area's program area, now reachable over HTTP too |
+| `&E00000-&E000FF` | stopped registers | the probe | the stopped machine's registers, the call result and the install marker (GET /bbc's `report`) |
+| `&E00100-&E100FF` | data buffer | the probe | the bytes of the last peek or poke, 64 KB (`GET /bbc/data`) |
 
 Shared memory has no layout of its own: one application at a time owns it, and each here picks
 its own. The game agent's is an example of a convention: an input page the BBC reads, and a state
@@ -319,8 +322,8 @@ services and applications on it the same way, in any language that can make an H
 
 | Route | What it does | In `bbc.py` |
 |---|---|---|
-| `GET /bbc` | State: running or halted, the stopped registers (`null` after a rung 0 stop), the last error, how many times the BBC has been stopped, and where shared memory, the transfer buffer and the stopped registers are | `status()`, `shared()` |
-| `POST /bbc/shared?offset=` | Write shared memory, the bytes as the body, with no stop | `shared_write()` |
+| `GET /bbc` | State: running or halted, the stopped registers (`null` after a rung 0 stop), the last error, how many times the BBC has been stopped (`stops`), where the stopped registers are (`report`), and shared memory (`shared`: its services offset, size, JIM address, and where the BBC's services port reads in it) | `status()`, `shared()` |
+| `POST /bbc/shared?offset=` | Write shared memory, the bytes as the body, with no stop; answers `{"written": n}` | `shared_write()` |
 | `GET /bbc/shared?offset=&len=` | Read shared memory, up to 4 KB a request, with no stop | `shared_read()` |
 | `POST /bbc/halt?rung=` | Stop the BBC (by the vsync event, an IRQ or an NMI) | `halt()`, `stopped()` |
 | `POST /bbc/continue?pc=&a=&x=&y=&p=` | Let it go on, each register optional; none can be set after a rung 0 stop, which is inside the OS | `go()`; `halt(regs=True)` skips rung 0 |

@@ -28,7 +28,7 @@ from bbc import BBC, ProbeError
 PLAYER = 0x0900
 SCREEN = 0x3000
 SCREEN_LEN = 0x5000
-STREAM_SIZE = 0x7E0000             # of the 8 MB of shared memory: the last 128 KB stays free
+STREAM_SIZE = 0x3FFF00             # the 4 MB of shared memory, less its last page (*CLAUDE's doorbell)
 BAYER = (np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) + 0.5) / 16
 CYCLES_PER_VSYNC = 40000           # 2 MHz, 20 ms
 COPY, FILL, OP = 19, 13, 30         # the player's cycles a copied byte, a filled byte, a code
@@ -287,6 +287,9 @@ def main():
     try:
         if not bbc.ready():
             print(f"The probe isn't in: type {BBC.install_line()} on the BBC")
+            return 1
+        if len(data) > bbc.shared()["size"] - 0x100:
+            print(f"{len(data) // 1024} KB is more than this Pi1MHz's shared memory takes: use --seconds")
             return 1
         t = time.monotonic()
         bbc.shared_write(0, data)

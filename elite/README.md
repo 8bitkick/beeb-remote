@@ -30,7 +30,7 @@ the `&FD00` window's page registers). `run_probe` lays out two parts of it:
 | `+&0000` | the input page: six held keys at `&00`, `RDKEY`'s answer at `&08`, a check byte at `&10` | reads it through the `&FD00` window | writes it with `POST /bbc/shared` when the keys change |
 | `+&0100` | the state mirror: Elite's RAM the player reads, about 570 bytes in flight | writes it through the services port, once a main-loop iteration | reads it with `GET /bbc/shared`, about once a frame |
 
-Neither is ever written by a peek or a poke, which use the probe's own transfer buffer, so other
+Neither is ever written by a peek or a poke, which use the probe's own data buffer, so other
 clients can stop the BBC and look while Elite plays.
 
 ## What it does to the BBC

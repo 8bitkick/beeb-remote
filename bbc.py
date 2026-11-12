@@ -2,7 +2,7 @@
 
 The probe gives two ways in.  Stops: stop the machine, read and write its memory, call code, let
 it go on, each stop by a rung of its ladder, the gentlest first (see BBC.max_rung).  And shared
-memory: 8 MB of the Pi1MHz that a remote application and its own code on the BBC both use while
+memory: 4 MB of the Pi1MHz that a remote application and its own code on the BBC both use while
 the BBC runs, with no stop (shared_write(), shared_read()).  Everything here is built from those,
 with no ROM and nothing on the BBC but the probe's install:
 
