@@ -9,6 +9,7 @@
      GET  /sim/screen                 the MODE 7 screen, as text
      POST /sim/break[?ctrl=1]         Break (Ctrl-Break); answers 3 s later
      GET  /sim/peek?addr=&len=        BBC RAM, read straight, without a stop (up to 256 bytes)
+     GET  /sim/stops                  probe stops since the start: each time the probe left running
      POST /sim/quit
    The port is PI1MHZ_PORT in the environment. */
 #include <arpa/inet.h>
@@ -75,6 +76,19 @@ void pi1mhz_bbc_reset(void)
    was_reset = true;
    board_reset();
    mirror();
+}
+
+/* ---- probe stops, counted: each time the probe's state leaves running (a halt asked, by any
+   rung, or a peek or poke that stops by itself).  The state changes only in the board's poll and
+   the HTTP answer, and a stop lasts much longer than the 100 us between samples. */
+static unsigned long stops;
+static rp_state_t last_state = RP_RUNNING;
+
+static void count_stops(void)
+{
+   rp_state_t s = ramprobe_state();
+   if (last_state == RP_RUNNING && s != RP_RUNNING && s != RP_OFF) stops++;
+   last_state = s;
 }
 
 /* ---- the keyboard, at the speed of fingers ---------------------------------------- */
@@ -241,6 +255,11 @@ static bool sim_route(int fd, bool post, const char *path, const char *query)
       reply(fd, 200, out);
       return true;
    }
+   if (!post && !strcmp(path, "/sim/stops")) {
+      snprintf(out, sizeof out, "{\"stops\":%lu}\n", stops);
+      reply(fd, 200, out);
+      return true;
+   }
    if (post && !strcmp(path, "/sim/quit")) { reply(fd, 200, "{}\n"); exit(0); }
    reply(fd, 404, "No such page.\n");
    return true;
@@ -329,8 +348,9 @@ static void tick(void *p)
    (void)p;
    (void)timing_set_timer_value(timing, timer, 200);
    board_poll();
+   count_stops();
    type_poll();
-   if (Pi1MHz_now_us % 1000u == 0u) http_poll();
+   if (Pi1MHz_now_us % 1000u == 0u) { http_poll(); count_stops(); }
    mirror();                         /* last: a request writes the window too, and the BBC reads
                                         its command through the callback the moment it's there */
 }
