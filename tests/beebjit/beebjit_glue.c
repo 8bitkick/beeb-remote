@@ -278,15 +278,14 @@ static void answer(int fd)
    }
    bool post = !strncmp(req, "POST ", 5);
    static uint8_t body[RAMPROBE_API_BODY_MAX];
-#ifdef HAVE_STREAM_BUFFER   /* the stream-buffer branch */
-   if (post && strncmp(req, "POST /bbc/buffer", 16) == 0) {          /* straight into the stream buffer */
+   if (post && strncmp(req, "POST /bbc/shared", 16) == 0) {          /* straight into shared memory */
       static char bout[512];
       char *qs = strchr(req, '?'), *sp = qs ? strchr(qs, ' ') : NULL;
       char q[256] = "";
       if (qs && sp && (size_t)(sp - qs - 1) < sizeof q) { memcpy(q, qs + 1, (size_t)(sp - qs - 1)); q[sp - qs - 1] = 0; }
       long cl = board_content_length(req);
       uint8_t *dest = NULL;
-      int st = ramprobe_api_buffer(q, cl > 0 ? (size_t)cl : 0u, &dest, bout, sizeof bout);
+      int st = ramprobe_api_shared(q, cl > 0 ? (size_t)cl : 0u, &dest, bout, sizeof bout);
       if (st == 200 && board_read_body(fd, req, got, dest, (size_t)cl) == cl)
          st = ramprobe_api_status(bout, sizeof bout);
       else if (st == 200) { st = 400; snprintf(bout, sizeof bout, "{\"error\":\"short body\"}\n"); }
@@ -296,7 +295,6 @@ static void answer(int fd)
       if (write(fd, head, (size_t)h) < 0 || write(fd, bout, strlen(bout)) < 0) perror("write");
       close(fd); return;
    }
-#endif
    long blen = post ? board_read_body(fd, req, got, body, sizeof body) : -1;   /* before req is cut up */
    char *sp1 = strchr(req, ' ');
    char *sp2 = sp1 ? strchr(sp1 + 1, ' ') : NULL;

@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Video in MODE 2 (160x256, 8 colours) or MODE 1 (320x256, 4 colours) on a BBC Micro, from the
-Pi1MHz's own memory: no network while it plays.
+Pi1MHz's shared memory: no network and no stops while it plays.
 
     python3 bitmap_play.py ~/Videos/rick.mp4 [--mode 2] [--fps 25] [--seconds 30]
 
 The Pi 5 dithers each frame to the mode's colours, packs it in the BBC's screen layout, and
 sends only what changed since the last: skip n bytes, copy n bytes, fill n bytes with one.  A
 frame that would take longer to draw than its share of time (a cut) draws its biggest changes
-first and leaves the rest for the next frames, so the beat holds.  The whole video goes to the
-probe's stream buffer (POST /bbc/buffer) in one request; a player in the BBC's RAM (&0900,
-CALL &900) reads it through the services port, timed by a vsync counter on EVNTV.  Escape
-stops it.
+first and leaves the rest for the next frames, so the beat holds.  The whole video goes into
+shared memory (POST /bbc/shared) in one request; a player in the BBC's RAM (&0900, CALL &900)
+reads it through the services port, timed by a vsync counter on EVNTV.  Escape stops it.
 
 The stream: for each frame, the vsyncs it lasts, then codes, then 0; a last 0 ends it.
 Codes: 1-127 skip that many bytes; &80+n copy n+1 bytes that follow; &C0+n fill n+1 bytes
@@ -29,7 +28,7 @@ from bbc import BBC, ProbeError
 PLAYER = 0x0900
 SCREEN = 0x3000
 SCREEN_LEN = 0x5000
-STREAM_SIZE = 0x7E0000
+STREAM_SIZE = 0x7E0000             # of the 8 MB of shared memory: the last 128 KB stays free
 BAYER = (np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) + 0.5) / 16
 CYCLES_PER_VSYNC = 40000           # 2 MHz, 20 ms
 COPY, FILL, OP = 19, 13, 30         # the player's cycles a copied byte, a filled byte, a code
@@ -45,10 +44,10 @@ SOURCE = """
         LDA #&09
         STA &0221
         CLI
-        LDA #0                  ; the services port at the stream: &400000
-        STA &FCA6
+        LDA #0                  ; the services port at the stream: shared memory's start,
+        STA &FCA6               ; on a 64 KB boundary
         STA &FCA7
-        LDA #&40
+        LDA #SHARED_HI
         STA &FCA8
         LDA vc
         STA tgt
@@ -121,8 +120,15 @@ vc:     BYTES 00
 tgt:    BYTES 00
 old:    BYTES 00 00
 """
-CODE, LABELS = asm(SOURCE, PLAYER)
-assert LABELS["hook"] >> 8 == PLAYER >> 8 and len(CODE) < 0x100
+
+
+def player(shared_at):
+    """The player for shared memory at services offset shared_at (GET /bbc's shared.at)."""
+    if shared_at & 0xFFFF:
+        raise ProbeError(f"shared memory at &{shared_at:06X}: the player wants it on a 64 KB boundary")
+    code, labels = asm(SOURCE, PLAYER, {"SHARED_HI": shared_at >> 16})
+    assert labels["hook"] >> 8 == PLAYER >> 8 and len(code) < 0x100
+    return code
 
 
 # ---- frames -------------------------------------------------------------------------------
@@ -283,18 +289,18 @@ def main():
             print(f"The probe isn't in: type {BBC.install_line()} on the BBC")
             return 1
         t = time.monotonic()
-        bbc._request("/bbc/buffer", post=True, body=data, offset=0)
+        bbc.shared_write(0, data)
         up = time.monotonic() - t
         print(f"uploaded in {up:.1f} s ({len(data) / max(up, 1e-3) / 1024:.0f} KB/s)", flush=True)
         bbc.type(f"MODE {o.mode}\r")
         if o.mode == 1:
             bbc.type("VDU19,1,1;0;19,2,6;0;\r")              # black, red, cyan, white
         time.sleep(0.5)
-        bbc.poke(PLAYER, CODE)
+        bbc.poke(PLAYER, player(bbc.shared()["at"]))
         bbc.type(f"CALL &{PLAYER:X}\r", wait=False)      # the player takes the machine over
         t = time.monotonic()
         time.sleep(max(0.0, n * ivl / 50.08 - 1.0))          # nothing on the network meanwhile
-        while bbc.status()["read"] < len(data) - 1 and time.monotonic() - t < n * ivl / 50 + 60:
+        while bbc.shared()["read"] < len(data) - 1 and time.monotonic() - t < n * ivl / 50 + 60:
             time.sleep(0.5)
         el = time.monotonic() - t
         print(f"played {n} frames in about {el:.1f} s ({n / el:.1f} a second)")

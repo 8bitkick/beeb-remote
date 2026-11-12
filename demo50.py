@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The Rick roll on a BBC Micro at 50 frames a second: MODE 7, then MODE 0, 1 and 2, with the
-palette chosen for each scene.  Played from the Pi1MHz's own memory, with no network traffic.
+palette chosen for each scene.  Played from the Pi1MHz's shared memory, with no network traffic
+and no stops.
 
     python3 demo50.py ~/Videos/rick50.mp4                      # encode (cached), upload, play
     python3 demo50.py ~/Videos/rick50.mp4@40 ~/Videos/rick50.mp4@100 --plan 7:8,0:8,1:8,2:8
@@ -23,7 +24,8 @@ and doesn't clear the screen: the first MODE 0 frame is drawn into the 19 KB tha
 doesn't show while MODE 7 is still playing, so the change is instant.  A mode change gets
 40 ms.
 
-The stream, read through the services port from &400000:
+The stream, in shared memory from its start, read through the services port (GET /bbc gives
+shared memory's services offset):
   header  0 the end; &7F a new mode: [the mode's table offset + 1, bit 6: the CRTC too, after
           which the player starts again from the vsync after that], set at the next vsync; else
           bits 0-5 the vsyncs to wait for before this frame is drawn (so the previous frame's
@@ -41,7 +43,8 @@ the time between with copies and pads.  The palette op costs 60 cycles of copyin
 fitting the copies around the ops costs some more.  The lines' colours are
 chosen top down with a little of each line's error carried to the next, so lines mix into
 colours neither has: dithering down the screen as well as across.  Checked in beebjit, frame by
-frame against what the encoder meant; not yet on a real BBC.
+frame against what the encoder meant, and played on a real Model B: 750 frames at 50.0 a second,
+none late.
 """
 import argparse
 import copy
@@ -63,7 +66,7 @@ PLAYER, BLOCKS = 0x0900, 0x0E00
 SCREEN, SCREEN_LEN = 0x3000, 0x5000
 PAGES = SCREEN_LEN >> 8
 CHAIN = 15                                 # the longest copy in one op
-STREAM_SIZE = 0x7E0000
+STREAM_SIZE = 0x7E0000                     # of the 8 MB of shared memory: the last 128 KB stays free
 NEWMODE = 0x7F
 MODE_TABLE = {7: 0, 0: 17, 1: 34, 2: 51}   # the mode's 17-byte table in the player
 CRTC_TOO = 0x40                            # the new-mode operand: table + 1, and this if the CRTC changes
@@ -86,9 +89,9 @@ start:  SEI
         STA frames
         STA frames+1
         STA late
-        STA &FCA6               ; the services port at the stream: &400000
-        STA &FCA7
-        LDA #&40
+        STA &FCA6               ; the services port at the stream: shared memory's start,
+        STA &FCA7               ; on a 64 KB boundary
+        LDA #SHARED_HI
         STA &FCA8
         LDA #0
         STA pending
@@ -228,7 +231,7 @@ if (end - 1) >> 8 not in SPECIAL_LO:
     BLOCKS_CODE += STUB
 BLOCKS_CODE = bytes(BLOCKS_CODE)
 assert BLOCKS + len(BLOCKS_CODE) <= SCREEN, hex(BLOCKS + len(BLOCKS_CODE))
-MAIN_CODE, L = asm(MAIN, PLAYER, {"TAB": TAB})
+MAIN_CODE, L = asm(MAIN, PLAYER, {"TAB": TAB, "SHARED_HI": 0})      # (the labels; see main_code)
 assert len(MAIN_CODE) <= 0x100, len(MAIN_CODE)
 SETPG_LO[PLAYER >> 8] = L["setpg"] & 255
 assert all(p in SETPG_LO and p in SPECIAL_LO for p in range(BLOCKS >> 8, (TAB - 1) >> 8)), (SETPG_LO, SPECIAL_LO)
@@ -262,6 +265,13 @@ pad:    STY &76
 """
 SLED_AT, SLED_NOPS = 0x80, 120
 SPECIAL_CODE = asm(SPECIAL_SRC, SPECIAL)[0]
+
+
+def main_code(shared_at):
+    """The player for shared memory at services offset shared_at (GET /bbc's shared.at)."""
+    if shared_at & 0xFFFF:
+        raise ProbeError(f"shared memory at &{shared_at:06X}: the player wants it on a 64 KB boundary")
+    return asm(MAIN, PLAYER, {"TAB": TAB, "SHARED_HI": shared_at >> 16})[0]
 assert len(SPECIAL_CODE) <= SLED_AT
 SPECIAL_CODE = (SPECIAL_CODE.ljust(SLED_AT, b"\xEA") + b"\xEA" * SLED_NOPS + bytes((0x24, 0x70))
                 + bytes((0x4C, L["disp"] & 255, L["disp"] >> 8)))
@@ -913,7 +923,7 @@ def main():
                   f"90% {int(np.percentile(backlog, 90))}, worst {int(backlog.max())} ({100 * backlog.max() / full:.0f}% of the screen)")
         print(f"{len(data) // 1024} KB in all")
         if len(data) > STREAM_SIZE:
-            print("more than the stream buffer holds: shorten the plan")
+            print("more than the stream may take of shared memory: shorten the plan")
             return 1
         shows.append((data, report))
     if o.encode_only:
@@ -924,27 +934,28 @@ def main():
             print(f"The probe isn't in: type {BBC.install_line()} on the BBC")
             return 1
         secs = sum(s for _, s in plan)
+        player = main_code(bbc.shared()["at"])
         # The player's line palette and pads go over &0B00, where the OS keeps the *KEY strings
         # (the probe's install puts its *KEY10 there, for a soft Break), and its palette table
         # over &0C00 (user-defined characters).  Both are put back once the player has returned.
         kept = {SPECIAL: bbc.peek(SPECIAL, 0x100), PALTAB: bbc.peek(PALTAB, len(PALTAB_CODE))}
         for i, (data, report) in enumerate(shows):
             t = time.monotonic()
-            bbc._request("/bbc/buffer", post=True, body=data, offset=0)
+            bbc.shared_write(0, data)
             up = time.monotonic() - t
             print(f"uploaded in {up:.1f} s ({len(data) / max(up, 1e-3) / 1024:.0f} KB/s)", flush=True)
-            bbc.poke(PLAYER, MAIN_CODE)
+            bbc.poke(PLAYER, player)
             bbc.poke(BLOCKS, BLOCKS_CODE)
             bbc.poke(SPECIAL, SPECIAL_CODE)
             bbc.poke(PALTAB, PALTAB_CODE)
             bbc.poke(0x76, bytes((0, SPECIAL >> 8)))           # the pads' jump: JMP (&0076)
-            was = bbc.status()["read"]
+            was = bbc.shared()["read"]
             bbc.type(f"CALL &{PLAYER:X}\r", wait=False)          # the player takes the machine over
-            while bbc.status()["read"] == was:                     # until it has started
+            while bbc.shared()["read"] == was:                     # until it has started
                 time.sleep(0.2)
             t = time.monotonic()
             time.sleep(max(0.0, secs - 0.5))                       # nothing on the network meanwhile
-            while bbc.status()["read"] < len(data) and time.monotonic() - t < secs + 60:
+            while bbc.shared()["read"] < len(data) and time.monotonic() - t < secs + 60:
                 time.sleep(0.5)
             el = time.monotonic() - t
             time.sleep(1.0)                                        # the player's exit: MODE 7, back to BASIC

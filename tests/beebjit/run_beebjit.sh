@@ -3,8 +3,8 @@
 # kc-beeb is a Master 128.  The real firmware C on board.h, patched into a copy of beebjit, and
 # served over HTTP for the tests here.
 #   BEEBJIT    a beebjit checkout (default: ~/presto/beebjit-upstream)
-#   PI1MHZ     a Pi1MHz checkout on ramprobe-fixes, or stream-fixes for the stream buffer
-#              (default: ~/Pi1MHz).  Its test board, stubs and 6502code.bin are used.
+#   PI1MHZ     a Pi1MHz checkout with the probe and its shared memory (default: ~/Pi1MHz).
+#              Its test board, stubs and 6502code.bin are used.
 #   BEEBJIT_ARGS more of beebjit's options, such as "-0 disc.ssd -writeable -mutable" for a disc in drive 0
 
 #   run_beebjit.sh PORT      just serve it on 127.0.0.1:PORT
@@ -84,13 +84,18 @@ cp -r "$SRC"/tests/ramprobe/stubs/* "$B/pi/"
 for f in services_emulator.c services.h ramprobe.c ramprobe.h ramprobe_api.c ramprobe_api.h \
          helpers.c helpers.h ram_emulator.c ram_emulator.h; do cp "$SRC/$f" "$B/pi/"; done
 cp "$SRC"/tests/ramprobe/board.h "$HERE"/beebjit_glue.c "$B/pi/"
+PI_FILES="services_emulator ramprobe ramprobe_api helpers ram_emulator"
+if [ -f "$SRC/lib/textparse.c" ]; then            # the API's request parsing
+   mkdir -p "$B/pi/lib"; cp "$SRC"/lib/textparse.c "$SRC"/lib/textparse.h "$B/pi/lib/"
+   PI_FILES="$PI_FILES lib/textparse"
+fi
 export RAMPROBE_6502CODE=${RAMPROBE_6502CODE:-$SRC/../firmware/Pi1MHz/6502code.bin}
 # beebjit's own files, as its build_headless_opt.sh lists them, then the board's.
 BJ_FILES=$(sed -n '/-o beebjit/,/-lm/p' "$B/bj/build_headless_opt.sh" | tr -d '\\' | tr ' ' '\n' | grep -E '\.(c|S)$')
-for f in services_emulator ramprobe ramprobe_api helpers ram_emulator; do
-   gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w -I"$B/pi" -c "$B/pi/$f.c" -o "$B/pi/$f.o"
+for f in $PI_FILES; do
+   gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w -I"$B/pi" -c "$B/pi/$f.c" -o "$B/pi/$(basename $f).o"
 done
-gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w $(grep -q ramprobe_api_buffer "$SRC/ramprobe_api.h" && echo -DHAVE_STREAM_BUFFER) -I"$B/pi" -I"$B/bj" -c "$B/pi/beebjit_glue.c" -o "$B/pi/beebjit_glue.o"
+gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w -I"$B/pi" -I"$B/bj" -c "$B/pi/beebjit_glue.c" -o "$B/pi/beebjit_glue.o"
 (cd "$B/bj" && gcc -O2 -g -DNDEBUG -DBEEBJIT_HEADLESS -fno-pie -no-pie -Wa,--noexecstack -w -o "$B/beebjit" \
     $BJ_FILES "$B"/pi/*.o -lm -lpthread) 2> "$B/build.log" || { cat "$B/build.log"; exit 1; }
 cd "$B/bj"

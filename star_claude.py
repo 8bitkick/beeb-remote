@@ -10,11 +10,10 @@ installed (X%=23:CALL &FC88).  On the BBC, at the BASIC prompt:
     *CLAUDE a bouncing ball
 
 How the BBC tells it without being stopped: the hook keeps the prompt in the BBC's RAM, and
-writes "CLDE" and a count into the Pi1MHz's memory through the services port, where the probe's
-GET /bbc/data reads from; this program reads that twice a second.  Every 20 s, and after every
-reset, one stop checks the hook and reads the prompt (should the doorbell have been overwritten by
-a peek).  Stops come in by the probe's ladder, the vsync event first, so with Pi1MHz firmware that
-has it there's no NMI; --max-rung 1 makes sure.
+writes "CLDE" and a count into the last page of the Pi1MHz's shared memory through the services
+port; this program reads that with GET /bbc/shared twice a second.  Every 20 s, and after every
+reset, one stop checks the hook (a Break or a program may have taken it) and reads the prompt.
+Stops come in by the probe's ladder, never by NMI unless --max-rung 2 allows it.
 
 The BBC's RAM it takes: &0900-&09C8 (the prompt) and &0A00-&0AFF (the hook), the cassette and
 RS423 buffers, so not with either in use.  &A8-&A9 while the command runs, which the OS keeps for
@@ -29,7 +28,7 @@ from bbc import BBC, ProbeError
 
 HOOK, PROMPT, FSCV = 0x0A00, 0x0900, 0x021E
 PROMPT_MAX = 200
-DOORBELL = b"CLDE"             # then the count, at the start of the probe's data buffer
+DOORBELL = b"CLDE"             # then the count, in shared memory's last page
 CHECK_EVERY = 20.0
 RING_EVERY = 0.5
 
@@ -88,11 +87,11 @@ copied: LDA #1
         PHA
         LDA &FCA8
         PHA
-        LDA #0                  ; the port at the probe's data buffer: its report + &100
+        LDA #BELLLO             ; the port at the doorbell, in shared memory
         STA &FCA6
-        LDA #DATAMID
+        LDA #BELLMID
         STA &FCA7
-        LDA #DATAHI
+        LDA #BELLHI
         STA &FCA8
         LDX #0                  ; C L D E, then the count
 bell:   LDA ring,X
@@ -132,13 +131,11 @@ m_busy: TEXT Claude is busy\\r
 m_use:  TEXT *CLAUDE <prompt>\\r
         BYTES 00
 """
-def assemble(report=0xBF0000):
-    """The hook for a probe whose report is at JIM `report` (newer firmware says in GET /bbc;
-    older firmware has it at &BF0000)."""
+def assemble(bell=0):
+    """The hook, ringing the doorbell at services offset `bell`."""
     global CODE, LABELS, OLDV, SEQ, BUSY
-    data = report + 0x100
-    CODE, LABELS = asm(SOURCE, HOOK, {"PROMPT": PROMPT, "PROMPT_MAX": PROMPT_MAX,
-                                      "DATAMID": (data >> 8) & 0xFF, "DATAHI": data >> 16})
+    CODE, LABELS = asm(SOURCE, HOOK, {"PROMPT": PROMPT, "PROMPT_MAX": PROMPT_MAX, "BELLLO": bell & 0xFF,
+                                      "BELLMID": (bell >> 8) & 0xFF, "BELLHI": bell >> 16})
     OLDV, SEQ, BUSY = (LABELS[k] - HOOK for k in ("oldv", "seq", "busy"))
     assert len(CODE) <= 0x100, len(CODE)
 
@@ -162,19 +159,15 @@ def intact(page):
 class Watcher:
     def __init__(self, bbc, log=print):
         self.bbc, self.log = bbc, log
-        try:
-            assemble(bbc.status().get("report", 0xBF0000))
-        except Exception:
-            pass
+        shared = bbc.shared()
+        self.bell = shared["size"] - 0x100        # the doorbell: shared memory's last page
+        assemble(shared["at"] + self.bell)
         self.seen = None               # the hook's count, as last handled
 
     def doorbell(self):
-        """Has the BBC rung, by the bytes the hook put in the Pi?  No stop."""
-        try:
-            b = bytes.fromhex(self.bbc._request("/bbc/data", offset=0, len=5).strip())
-        except ValueError:
-            return False
-        return len(b) == 5 and b[:4] == DOORBELL and b[4] != self.seen
+        """Has the BBC rung, by the bytes the hook put in shared memory?  No stop."""
+        b = self.bbc.shared_read(self.bell, 5)
+        return b[:4] == DOORBELL and b[4] != self.seen
 
     def check(self):
         """One stop: put the hook in if it isn't, and return a prompt waiting, if there is one."""
@@ -188,7 +181,6 @@ class Watcher:
                 bbc.poke(HOOK, hook_bytes(oldv, page[SEQ]))
                 bbc.poke(FSCV, bytes([HOOK & 0xFF, HOOK >> 8]))
                 self.seen = page[SEQ]
-                bbc.peek(HOOK, len(CODE))      # leaves no doorbell in the data buffer
                 self.log(f"[*CLAUDE is in: the hook at &{HOOK:04X}, then FSCV's &{oldv:04X}]")
                 return None
             seq, busy = page[SEQ], page[BUSY]
@@ -205,10 +197,8 @@ class Watcher:
         return None
 
     def finished(self):
-        """Let the hook take another, and wipe the doorbell."""
-        with self.bbc.stopped():
-            self.bbc.poke(HOOK + BUSY, b"\0")
-            self.bbc.peek(HOOK, len(CODE))
+        """Let the hook take another."""
+        self.bbc.poke(HOOK + BUSY, b"\0")
 
     def watch(self, handle):
         resets, next_check, waiting_said = None, 0.0, False

@@ -1,7 +1,10 @@
 """A BBC Micro driven over the network through the Pi1MHz RAM probe (Pi1MHz docs/dev/ramprobe.md).
 
-The probe gives five things: stop the machine, read and write its memory, call code, let it go
-on.  Each stop comes in by a rung of its ladder, the gentlest first (see BBC.max_rung).  Everything here is built from those, with no ROM and nothing on the BBC but the probe's install:
+The probe gives two ways in.  Stops: stop the machine, read and write its memory, call code, let
+it go on, each stop by a rung of its ladder, the gentlest first (see BBC.max_rung).  And shared
+memory: 8 MB of the Pi1MHz that a remote application and its own code on the BBC both use while
+the BBC runs, with no stop (shared_write(), shared_read()).  Everything here is built from those,
+with no ROM and nothing on the BBC but the probe's install:
 
     bbc = BBC("Pi1MHz.local")
     bbc.type("PRINT 6*7\\r")
@@ -20,7 +23,7 @@ MOS120_RESET = 0xD9CD          # the reset vector at &FFFC on a Model B's MOS 1.
 KEYBUF_START, KEYBUF_END = 0x02D8, 0x02E1   # buffer 0's pointers, offsets into page 3
 KEYBUF_FIRST = 0xE0            # the buffer is &03E0-&03FF
 ESCAPE_FLAG = 0xFF             # the OS's escape flag; bit 7 set means Escape was pressed
-INSTALL = "X%=23:CALL &FC88"     # the PR #51 probe; X%=24 and X%=21 on older firmware
+INSTALL = "X%=23:CALL &FC88"     # the PR #51 probe
 
 
 class ProbeError(Exception):
@@ -97,6 +100,25 @@ class BBC:
         s = json.loads(self._request("/bbc"))
         self._api = s.get("api", 1)
         return s
+
+    def shared(self):
+        """Shared memory, from GET /bbc: its services offset ("at", for the BBC's services port),
+        its "size", its JIM address ("jim", for the &FD00 window's page registers), and "read":
+        where the services port points in it, or -1 if elsewhere."""
+        return self.status()["shared"]
+
+    def shared_write(self, offset, data):
+        """Write bytes into shared memory at offset, in one request, with no stop."""
+        if data:
+            self._request("/bbc/shared", post=True, body=bytes(data), offset=offset)
+
+    def shared_read(self, offset, length):
+        """Read bytes of shared memory from offset, with no stop."""
+        out = bytearray()
+        while len(out) < length:
+            n = min(4096, length - len(out))
+            out += bytes.fromhex(self._request("/bbc/shared", offset=offset + len(out), len=n).strip())
+        return bytes(out)
 
     def _act(self, path, body=None, **params):
         """Start something, and wait until the Pi says it's over.  With api 2 the Pi answers when

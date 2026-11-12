@@ -115,7 +115,10 @@ def missing():
     if not os.path.exists(os.path.join(bj, "bbc.c")) or not os.path.exists(os.path.join(bj, "roms", "os12.rom")):
         return f"no beebjit at {bj} (BEEBJIT)"
     if not os.path.exists(os.path.join(PI1MHZ, "src", "tests", "ramprobe", "board.h")):
-        return f"no Pi1MHz checkout with the probe's test board at {PI1MHZ} (PI1MHZ: ramprobe-fixes or stream-fixes)"
+        return f"no Pi1MHz checkout with the probe's test board at {PI1MHZ} (PI1MHZ)"
+    with open(os.path.join(PI1MHZ, "src", "ramprobe_api.h")) as f:
+        if "ramprobe_api_shared" not in f.read():
+            return f"the Pi1MHz checkout at {PI1MHZ} has no shared memory (PI1MHZ)"
     return None
 
 
