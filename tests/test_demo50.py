@@ -2,7 +2,7 @@
 """demo50 end to end on an emulated Model B: a short clip encoded, put in the Pi1MHz's shared
 memory and played by the player in the BBC's RAM, on beebjit running the real Pi1MHz probe
 firmware.  It passes if every frame is drawn, none starts late, the probe makes no stop while the
-player runs (beebjit's own count, GET /sim/stops), and &0B00 and &0C00 are put back after.
+player runs (beebjit's own count, GET /sim/stops), and the RAM it used is put back after.
 
 The clip is ffmpeg's test pattern (moving colour bars and a counter), so no video is needed.
 Real time: the BBC plays at 50 frames a second, as it would on the real machine.
@@ -131,6 +131,7 @@ try:
     sim("/sim/type", text=BBC.install_line() + "\r")
     ok(bbc.ready(), "the probe is in")
     keys = bbc.peek(0x0B00, 0x100)
+    work = bbc.peek(demo50.BLOCKS, len(demo50.BLOCKS_CODE))
     for plan, extra in PLAYS:
         frames = int(sum(float(s) for _, s in (p.split(":") for p in plan.split(","))) * 50)
         print(f"== --plan {plan} {' '.join(extra)}")
@@ -141,6 +142,8 @@ try:
            f"every frame, none late: {counted or text.splitlines()[-3:]}")
         ok(stops == 0, f"no stops while it played ({took:.1f} s): {stops}")
         ok(bbc.peek(0x0B00, 0x100) == keys, "&0B00 put back: the *KEY strings, the probe's *KEY10 among them")
+        ok(bbc.peek(demo50.BLOCKS, len(demo50.BLOCKS_CODE)) == work,
+           f"&0E00-&{demo50.BLOCKS + len(demo50.BLOCKS_CODE) - 1:04X} put back: a filing system's workspace, BASIC's program")
     sim("/sim/break")
     ok(bbc.ready() and "Pi1MHz probe on" in sim_screen(), "a soft Break brings the probe back")
 finally:

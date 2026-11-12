@@ -66,7 +66,7 @@ PLAYER, BLOCKS = 0x0900, 0x0E00
 SCREEN, SCREEN_LEN = 0x3000, 0x5000
 PAGES = SCREEN_LEN >> 8
 CHAIN = 15                                 # the longest copy in one op
-STREAM_SIZE = 0x7E0000                     # of the 8 MB of shared memory: the last 128 KB stays free
+STREAM_SIZE = 0x3FFF00                     # the 4 MB of shared memory, less its last page (*CLAUDE's doorbell)
 NEWMODE = 0x7F
 MODE_TABLE = {7: 0, 0: 17, 1: 34, 2: 51}   # the mode's 17-byte table in the player
 CRTC_TOO = 0x40                            # the new-mode operand: table + 1, and this if the CRTC changes
@@ -923,7 +923,7 @@ def main():
                   f"90% {int(np.percentile(backlog, 90))}, worst {int(backlog.max())} ({100 * backlog.max() / full:.0f}% of the screen)")
         print(f"{len(data) // 1024} KB in all")
         if len(data) > STREAM_SIZE:
-            print("more than the stream may take of shared memory: shorten the plan")
+            print(f"{len(data) // 1024} KB is more than shared memory takes ({STREAM_SIZE // 1024} KB): shorten the plan")
             return 1
         shows.append((data, report))
     if o.encode_only:
@@ -934,11 +934,21 @@ def main():
             print(f"The probe isn't in: type {BBC.install_line()} on the BBC")
             return 1
         secs = sum(s for _, s in plan)
-        player = main_code(bbc.shared()["at"])
+        shared = bbc.shared()
+        room = min(STREAM_SIZE, shared["size"] - 0x100)
+        too_long = [len(d) for d, _ in shows if len(d) > room]
+        if too_long:
+            print(f"{too_long[0] // 1024} KB is more than this Pi1MHz's shared memory takes ({room // 1024} KB): "
+                  "shorten the plan")
+            return 1
+        player = main_code(shared["at"])
         # The player's line palette and pads go over &0B00, where the OS keeps the *KEY strings
-        # (the probe's install puts its *KEY10 there, for a soft Break), and its palette table
-        # over &0C00 (user-defined characters).  Both are put back once the player has returned.
-        kept = {SPECIAL: bbc.peek(SPECIAL, 0x100), PALTAB: bbc.peek(PALTAB, len(PALTAB_CODE))}
+        # (the probe's install puts its *KEY10 there, for a soft Break), its palette table over
+        # &0C00 (user-defined characters), and its copy chains over &0E00 on, where a filing
+        # system keeps its workspace (MMFS its catalogue, which it then finds "Bad Sum") and BASIC
+        # its program.  All are put back once the player has returned.
+        kept = {SPECIAL: bbc.peek(SPECIAL, 0x100), PALTAB: bbc.peek(PALTAB, len(PALTAB_CODE)),
+                BLOCKS: bbc.peek(BLOCKS, len(BLOCKS_CODE))}
         for i, (data, report) in enumerate(shows):
             t = time.monotonic()
             bbc.shared_write(0, data)
