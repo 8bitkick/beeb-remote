@@ -40,18 +40,11 @@ is fixed), so it places each palette op on its exact cycle from the frame's firs
 the time between with copies and pads.  The palette op costs 60 cycles of copying time, and
 fitting the copies around the ops costs some more.  The lines' colours are
 chosen top down with a little of each line's error carried to the next, so lines mix into
-colours neither has: dithering down the screen as well as across.
-
-A screen byte means nothing without its line's colours, so with --lines a frame's bytes and its
-colours change together: a row's new bytes are copied after the raster has drawn it in one frame
-and before it comes back in the next, when its new colours come too (a frame's ops start with
-the rest of its own lower rows, then the next frame's rows behind the raster).  A row that
-doesn't fit is held, old bytes and old colours, until a frame has room: a cut wipes in top down
-rather than showing old bytes through new colours.  The lines above a held row close in on its
-colours, one a line.  Checked in beebjit frame by frame (all 750 of the Big Buck Bunny test)
-against what the encoder meant; not yet on a real BBC.
+colours neither has: dithering down the screen as well as across.  Checked in beebjit, frame by
+frame against what the encoder meant; not yet on a real BBC.
 """
 import argparse
+import copy
 import itertools
 import os
 import pickle
@@ -327,20 +320,12 @@ CONTRAST = {7: 1, 0: 1.7, 1: 1.2, 2: 1.2}    # the slope about the pivot: steepe
 PIVOT = {7: 0.5, 0: 0.58, 1: 0.5, 2: 0.5}    # the grey that stays put: above the middle, more of the picture goes black
 
 
-# --lines: a gentler curve (eight colours to dither with need less help), and a pale or dark
-# scene not stretched to the full range (a pale sky would go saturated blue)
-LINES_LEVELS = dict(black=0.06, contrast=0.9, least=0.8)
-LINES_GAMMA = 1.8          # the colours are chosen nearer linear light: a dither mixes light, so half
-                           # white and half black looks a light grey, not a middle one
-
-
 class Levels:
     """The frame's levels stretched to the full range, smoothed over time so the brightness
     doesn't pump from frame to frame; a cut starts afresh."""
     def __init__(self, mode):
         self.lo = self.hi = None
         self.black, self.contrast, self.pivot = BLACK[mode], CONTRAST[mode], PIVOT[mode]
-        self.least = 0.0                           # the least range stretched to 0-1
 
     def __call__(self, rgb, cut):
         lo, hi = np.percentile(rgb, (1, 99))
@@ -349,11 +334,7 @@ class Levels:
         else:
             self.lo += 0.1 * (lo - self.lo)
             self.hi += 0.1 * (hi - self.hi)
-        lo, hi = self.lo, self.hi
-        if hi - lo < self.least:                   # widened towards 0 and 1 in proportion to the room
-            a = (self.least - (hi - lo)) / max(1 - (hi - lo), 1e-3)   # each side: a pale scene stays pale
-            lo, hi = lo * (1 - a), hi + (1 - hi) * a
-        x = np.clip(0.5 + self.contrast * ((rgb - lo) / max(hi - lo, 1e-3) - self.pivot), 0, 1)
+        x = np.clip(0.5 + self.contrast * ((rgb - self.lo) / max(self.hi - self.lo, 1e-3) - self.pivot), 0, 1)
         return self.black + (1 - self.black) * x
 
 
@@ -483,208 +464,145 @@ LINE_CHANGES = np.array([[4 - len(a & b) for b in LINE_SETS] for a in LINE_SETS]
 LINE_MASK = np.zeros((8, len(LINE_COMBOS)), dtype=bool)
 for j, c in enumerate(LINE_COMBOS):
     LINE_MASK[list(c), j] = True
-LINE_WT = np.array([1.0, 1.0, 1.0])   # how much an error in red, green, blue counts
-LINE_EPS = 0.6             # a pixel keeps its colour while it's this close to the best (squared colour)
-                           # and the line's colours stay: fewer bytes to send, the picture barely changed
 LINE_STAY = 0.02           # what keeping a line's colours from the last frame is worth: no flicker
 LINE_CARRY = 0.4           # how much of a line's error the next line down takes: lines then mix
                            # into colours neither has, a dither down the screen as well as across
 
 
-def blue_noise(n=64, sigma=1.9, seed=7):
-    """A blue-noise threshold map (Ulichney's void and cluster, 1993): n x n, values 0 to 1."""
-    rng = np.random.default_rng(seed)
-    dd = np.minimum(np.arange(n), n - np.arange(n))
-    k = np.exp(-(dd[:, None] ** 2 + dd[None, :] ** 2) / (2 * sigma ** 2))
-    kf = np.fft.rfft2(k)
-    energy = lambda p: np.fft.irfft2(np.fft.rfft2(p) * kf, s=(n, n))
-    p = (rng.random((n, n)) < 0.1).astype(float)
-    while True:
-        e = energy(p)
-        c = np.unravel_index(np.argmax(np.where(p > 0, e, -np.inf)), p.shape)
-        p[c] = 0
-        e = energy(p)
-        v = np.unravel_index(np.argmin(np.where(p > 0, np.inf, e)), p.shape)
-        if v == c:
-            p[c] = 1
-            break
-        p[v] = 1
-    rank = np.zeros((n, n), int)
-    ones = int(p.sum())
-    q, e = p.copy(), energy(p)
-    for r in range(ones - 1, -1, -1):
-        c = np.unravel_index(np.argmax(np.where(q > 0, e, -np.inf)), q.shape)
-        q[c] = 0
-        e -= np.roll(np.roll(k, c[0], 0), c[1], 1)
-        rank[c] = r
-    q, e = p.copy(), energy(p)
-    for r in range(ones, n * n):
-        v = np.unravel_index(np.argmin(np.where(q > 0, np.inf, e)), q.shape)
-        q[v] = 1
-        e += np.roll(np.roll(k, v[0], 0), v[1], 1)
-        rank[v] = r
-    return (rank + 0.5) / (n * n)
+LINE_TUPLES = [t for t in itertools.permutations(range(8), 4) if 0 in t]   # colours in slot order
+LINE_TUPLE_AT = {t: i for i, t in enumerate(LINE_TUPLES)}
+LINE_TUPLE_SET = np.array([LINE_COMBOS.index(tuple(sorted(t))) for t in LINE_TUPLES])
+LINE_NEXT = np.array([[i] + [LINE_TUPLE_AT[u] for u in LINE_TUPLES
+                             if sum(a != b for a, b in zip(t, u)) == 1] for i, t in enumerate(LINE_TUPLES)])
+LINE_TUPLE_ARR = np.array(LINE_TUPLES)
 
 
-LINE_MASK_KIND = "bayer"   # the ordered dither's threshold map: "bayer" or "blue" (blue: no cross-
-                           # hatching, but the colours looked better to people with Bayer)
+def unpack1(mem):
+    """MODE 1 screen memory to logical colours, 256 x 320."""
+    b = np.frombuffer(bytes(mem), np.uint8).reshape(32, 80, 8).transpose(0, 2, 1).reshape(256, 80)
+    pix = np.zeros((256, 320), np.uint8)
+    for p in range(4):
+        pix[:, p::4] = ((b >> (7 - p)) & 1) * 2 + ((b >> (3 - p)) & 1)
+    return pix
 
 
-class LinePalettes:
-    """For each line in turn, top down: the error carried from the line above added, the best 4
-    colours of those at most one colour from the line above's (one palette op), scored on the
-    whole line, then the line ordered-dithered across.  A colour that stays keeps its logical
-    colour, so only the changed one needs a palette op and its pixels redrawing.
+ROW_OF_BYTE = np.arange(SCREEN_LEN) // 640
 
-    The lines of a held row keep last frame's colours and pixels exactly (see encode_all: its new
-    bytes didn't fit, so the row shows the old picture rather than old bytes through new
-    colours).  The lines above a held row close in on its colours, one a line."""
+
+class LineEncoder:
+    """MODE 1 with a palette for every line, never showing old pixels in new colours: a character
+    row (8 lines) changes any of its lines' colours only in a frame that also writes every byte of
+    the row that changes.  Rows that can't this frame keep their colours (their pixels still move
+    towards the picture in them) and go first next time; after a cut the new scene wipes in from
+    the top.  The lines' colours are chosen together, down the screen (Viterbi over the colours in
+    slot order: a line may change one slot from the line above's), each line scored on its own
+    error plus LINE_STAY for differing from what it shows now."""
     def __init__(self):
-        self.pals = np.zeros((256, 4), int)          # what the screen shows: at first, all black
-        self.pix = np.zeros((256, 320), np.uint8)
-        self.t = bayer(256, 320) if LINE_MASK_KIND == "bayer" else np.tile(blue_noise(), (4, 5))
+        self.shown = None                          # each line's colours, as a LINE_TUPLES index
+        self.wait = np.zeros(32)
+        self.wiping = False                        # after a cut, until every row has the new scene
+        self.t = bayer(256, 320)
 
-    @staticmethod
-    def _next(cur):
-        """The colour sets one palette op from cur: a colour other than black (or a second
-        black) changed for one not in it, keeping the others' logical colours."""
-        out = [list(cur)]
-        for s in range(4):
-            if cur[s] == 0 and cur.count(0) == 1:        # (one black stays; a second may go)
-                continue
-            for c in range(1, 8):
-                if c not in cur:
-                    v = list(cur)
-                    v[s] = c
-                    out.append(v)
-        return out
+    def line_errors(self, rgb):
+        d8 = ((rgb[:, :, None, :] - PHYS[None, None]) ** 2).sum(3)              # 256 x 320 x 8
+        return np.stack([d8[:, :, list(c)].min(2).mean(1) for c in LINE_COMBOS], 1)   # 256 x 35
 
-    def plan(self, rgb, cut, held=None):
-        """(pals, pix) for the frame, the held lines (bool, 256) as they were."""
-        h, w, _ = rgb.shape
-        held = np.zeros(h, bool) if held is None else held
-        nxt = np.full(h + 1, h)                        # the first held line below each line
-        for y in range(h - 1, -1, -1):
-            nxt[y] = y if held[y] else nxt[y + 1]
-        pals, pix = np.zeros((h, 4), int), np.zeros((h, w), np.uint8)
-        carry, cur = np.zeros((w, 3)), None
-        for y in range(h):
+    def choose(self, E, closed):
+        n = len(LINE_TUPLES)
+        Es = E[:, LINE_TUPLE_SET] + LINE_STAY * (np.arange(n)[None] != self.shown[:, None])
+        lines_closed = np.repeat(closed, 8)
+        Es[lines_closed] = np.inf
+        Es[lines_closed, self.shown[lines_closed]] = E[lines_closed, LINE_TUPLE_SET[self.shown[lines_closed]]]
+        cost, back = Es[0].copy(), np.zeros((256, n), dtype=np.int64)
+        for y in range(1, 256):
+            c = cost[LINE_NEXT]
+            k = c.argmin(1)
+            back[y] = LINE_NEXT[np.arange(n), k]
+            cost = c[np.arange(n), k] + Es[y]
+        st = np.zeros(256, dtype=np.int64)
+        st[-1] = int(cost.argmin())
+        for y in range(255, 0, -1):
+            st[y - 1] = back[y, st[y]]
+        return st
+
+    def dither(self, rgb, st, mpix):
+        pals = LINE_TUPLE_ARR[st]
+        shown = LINE_TUPLE_ARR[self.shown]
+        pix, carry = np.zeros((256, 320), np.uint8), np.zeros((320, 3))
+        for y in range(256):
             t = rgb[y] + carry
-            if held[y]:
-                cur, p = list(self.pals[y]), self.pix[y].astype(int)
-            else:
-                y0 = nxt[y + 1] if y + 1 < h else h    # (held[y] is False, so nxt[y] would be y)
-                target = list(self.pals[y0]) if y0 < h else None
-                if cur is None:                        # line 0: any colours (the header's palette)
-                    old = None if cut else list(self.pals[0])
-                    cands = []
-                    for c in LINE_COMBOS:
-                        if old is None:
-                            cands.append(list(c))
-                        else:
-                            keep, seen = [], set()
-                            for x in old:              # (each colour kept once: the screen starts all black)
-                                keep.append(x if x in c and x not in seen else None)
-                                seen.add(x)
-                            rest = iter(x for x in c if x not in keep)
-                            cands.append([x if x is not None else next(rest) for x in keep])
-                else:
-                    cands = self._next(cur)
-                if target is not None:
-                    room = y0 - y                      # palette ops left before the held line
-                    ok = [v for v in cands if sum(a != b for a, b in zip(v, target)) <= room]
-                    if not ok:                         # closing in: one of target's colours, in its slot
-                        base = list(cur) if cur is not None else list(target)
-                        diff = [s for s in range(4) if base[s] != target[s]]
-                        if diff:
-                            base[diff[0]] = target[diff[0]]
-                        ok = [base]
-                    cands = ok
-                C = np.array(cands)
-                d8 = (((t[:, None, :] - PHYS[None]) ** 2) * LINE_WT).sum(2)           # w x 8
-                err = d8[:, C].min(2).mean(0)
-                if not cut:
-                    same = np.array([sorted(v) == sorted(self.pals[y]) for v in cands])
-                    err = err + LINE_STAY * ~same
-                cur = cands[int(err.argmin())]
-                x = t + (self.t[y][:, None] - 0.5) * AMPLITUDE
-                dist = (((x[:, None, :] - PHYS[cur][None]) ** 2) * LINE_WT).sum(2)    # w x 4
-                p = dist.argmin(1)
-                if not cut and (self.pals[y] == cur).all():
-                    q = self.pix[y].astype(int)
-                    p = np.where(dist[np.arange(w), q] - dist.min(1) < LINE_EPS, q, p)
-            pals[y], pix[y] = cur, p
-            carry = np.clip(LINE_CARRY * (t - PHYS[np.array(cur)[p]]), -0.5, 0.5)
-        return pals, pix
+            x = t + (self.t[y][:, None] - 0.5) * AMPLITUDE
+            dist = ((x[:, None, :] - PHYS[pals[y]][None]) ** 2).sum(2)
+            p = dist.argmin(1)
+            q = mpix[y].astype(np.int64)
+            same = pals[y][q] == shown[y][q]                  # what's on screen still means that colour
+            p = np.where(same & (dist[np.arange(320), q] - dist.min(1) < EPS[1]), q, p)
+            pix[y] = p
+            carry = np.clip(LINE_CARRY * (t - PHYS[pals[y][p]]), -0.5, 0.5)
+        return pix
 
-    def commit(self, pals, pix):
-        self.pals, self.pix = pals.copy(), pix.copy()
-
-
-def line_ops(pals):
-    """The palette ops [(line, Y)] for lines 1-255: at most one colour changes a line."""
-    ops = []
-    for y in range(1, 256):
-        ch = [k for k in range(4) if pals[y][k] != pals[y - 1][k]]
-        assert len(ch) <= 1, (y, pals[y - 1], pals[y])
-        if ch:
-            ops.append((y, ch[0] * 8 + int(pals[y][ch[0]])))
-    return ops
+    def frame(self, rgb, cut, screen, first=False, share=0.85):
+        """(16 palette bytes for line 0, screen memory wanted, palette ops, the lines' colours, the
+        bytes that must be written this frame)."""
+        mpix = unpack1(screen.mem)
+        if first or self.shown is None:
+            pal = Palette(4)(rgb, True)[0]
+            self.shown = np.full(256, LINE_TUPLE_AT[tuple(pal)])
+            mpix[:] = 0
+        E = self.line_errors(rgb)
+        closed = np.zeros(32, dtype=bool)
+        if first:
+            closed[:] = True
+        mem = np.frombuffer(bytes(screen.mem), np.uint8)
+        while True:
+            st = self.choose(E, closed)
+            pix = self.dither(rgb, st, mpix)
+            cur = np.frombuffer(bp.pack(pix, 1), np.uint8)
+            if self.wiping or cut:                 # rows still to come keep the old scene: no copying
+                cur = np.where(np.repeat(closed, 640), mem, cur)          # spent on what goes
+            moved = (st != self.shown).reshape(32, 8).any(1) & ~closed
+            diff = cur != mem
+            row_cost = np.array([diff[r * 640:(r + 1) * 640].sum() for r in range(32)]) * moved
+            ops = int((st[1:] != st[:-1]).sum())
+            budget = share * (LINE_END - ops * PAL_OP) / COPY        # bytes this frame can surely take
+            if row_cost.sum() <= budget:
+                break
+            # close rows until it fits: after a cut the bottom ones (a wipe from the top), else the
+            # ones that have waited least, the costliest first
+            cand = [r for r in range(32) if moved[r]]
+            cand.sort(key=(lambda r: -r) if cut else (lambda r: (self.wait[r], -row_cost[r])))
+            total = row_cost.sum()
+            for r in cand:
+                if total <= budget:
+                    break
+                closed[r] = True
+                total -= row_cost[r]
+        self.wait = np.where(closed, self.wait + 1, 0)
+        self.wiping = bool(closed.any()) and (self.wiping or cut)
+        must = np.repeat(moved, 640) & diff
+        if self.wiping or cut:
+            pix = np.where(np.repeat(closed, 8)[:, None], mpix, pix)
+        self.shown = st
+        pals = LINE_TUPLE_ARR[st]
+        ops = [(y, k * 8 + int(pals[y][k])) for y in range(1, 256) for k in range(4) if pals[y][k] != pals[y - 1][k]]
+        return ula_palette(1, tuple(int(c) for c in pals[0])), cur.tobytes(), ops, pals, must
 
 
-def fields(frames, n):
-    """Each picture for n fields: the line colours must be set every field, so a picture shown
-    for two is sent twice, the second time with nothing new but what it couldn't fit."""
-    for cut, rgb in frames:
-        for i in range(n):
-            yield cut and i == 0, rgb, i > 0
-
-
-def frames_lines(path, start, seconds, fps):
-    """The MODE 1 frames, levelled and smoothed: (cut, rgb)."""
+def targets_lines(path, start, seconds, fps):
+    """For each MODE 1 frame: (cut, the frame's levelled colours), for LineEncoder."""
     m = MODES[1]
     smooth, levels, last_small = Smooth(), Levels(1), None
-    levels.black, levels.contrast, levels.least = LINES_LEVELS["black"], LINES_LEVELS["contrast"], LINES_LEVELS["least"]
     for f in source(path, start, seconds, m["w"], m["h"], fps):
         small = f[::8, ::8]
         cut = last_small is not None and np.abs(small - last_small).mean() > 0.12
         last_small = small
-        yield cut, levels(smooth(f, cut), cut) ** LINES_GAMMA
+        yield cut, levels(smooth(f, cut), cut)
 
 
-LINE_A = 4550              # line y's palette op starts LINE_A + 128 * y cycles from the frame's first op;
+LINE_A = 4550              # cycles from a frame's first op to the start of line 1's palette op;
                            # its writes then land in the middle of the blank (measured in beebjit:
                            # 4535-4565 is clean)
 LINE_END = 39000           # the frame's ops end by here, leaving the next header time before the vsync
-ROW = 640                  # a character row: 8 lines, 80 bytes each
-
-
-def row_drawn(r):
-    """The cycle (from the frame's first op) by which the raster has finished character row r.
-    Line y's palette op starts at LINE_A + 128 * y, its writes are in the blank before line y and
-    the line is shown in the 80 cycles after; then a margin."""
-    return LINE_A + 128 * (8 * r + 7) + 140 + 32
-
-
-def row_start(r):
-    """The cycle by which row r's bytes must all be in memory: its first line's palette op."""
-    return LINE_A + 128 * 8 * r + 32
-
-
-def row_cost(changed):
-    """The cycles to copy a row's changed bytes (bool, 640): runs, bridged over gaps of one."""
-    d = np.diff(np.concatenate(([0], changed.astype(np.int8), [0])))
-    s, e = np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]
-    cost, last = 0, -9
-    for a, b in zip(s, e):
-        n = b - a
-        if a - last <= 1:
-            cost += COPY * (a - last)                  # bridged
-        else:
-            cost += PIECE
-        cost += n * COPY + (n // CHAIN) * PIECE
-        last = b
-    return cost + 2 * SETPAGE
 
 
 # ---- the changes, costed ------------------------------------------------------------------
@@ -779,59 +697,62 @@ class Screen:
         return codes, cost, int(changed.sum()), left
 
 
-    @staticmethod
-    def schedule(ops, queue, until_end=LINE_END):
-        """One frame's ops: its palette ops (this frame's colours), each started on its cycle,
-        LINE_A + 128 * line from the frame's first op (or the cycle given), and the copies in the queue, in
-        order, filling the time between.  A queue item [start, end, row, src, early, late]
-        copies src[start:end]: not before cycle early (the raster has drawn the row) and
-        finishing by late (the raster comes to it), if late isn't None.  Returns (the ops, the
-        cycles, the pieces written [(start, end)], what's left of the queue, the rows that
-        missed their late)."""
-        queue = [list(q) for q in queue]
-        starts = [o[2] if len(o) > 2 else LINE_A + 128 * o[0] for o in ops]     # (line, Y[, cycle])
-        assert all(b - a >= PAL_OP for a, b in zip(starts, starts[1:])), "palette ops overlap"
+    def encode_lines(self, cur, ops, wipe=False, must=None):
+        """A MODE 1 frame with line palettes: each palette op starts on its cycle, LINE_A + 128 *
+        line from the frame's first op, and the copies fill the time between, the longest-waiting
+        bytes first, in address order, padded to the cycle."""
+        care = np.ones(SCREEN_LEN, dtype=bool)
+        cands, changed = self.pieces(cur, care, None)
+        order = sorted(cands, key=lambda x: x[0]) if (wipe or changed.mean() > 0.5) else \
+            sorted(cands, key=lambda x: (-x[2], x[0]))
+        if must is not None:                               # the rows changing colour: all of them, first
+            cm = np.concatenate(([0], np.cumsum(must)))
+            order.sort(key=lambda x: cm[x[1]] == cm[x[0]])
+        starts = [LINE_A + 128 * y for y, _ in ops]
+        capacity = sum(b - a for a, b in zip([24] + [x + PAL_OP for x in starts], starts + [LINE_END]))
+        chosen, spent = [], 0
+        for s0, e0, w, est in order:
+            if spent + est > 0.8 * capacity and not (must is not None and cm[e0] > cm[s0]):
+                continue
+            chosen.append((s0, e0))
+            spent += est
+        chunks = []
+        for s0, e0 in sorted(chosen):
+            for a in range(s0, e0, CHAIN):
+                chunks.append([a, min(a + CHAIN, e0)])
         out, page, t = bytearray(), PLAYER >> 8, 0
-        pieces, failed = [], set()
+        done = []
 
-        def emit_pad(n):
+        def emit_pad(r):
             nonlocal t
-            while n:
-                c = min(n, PAD_MAX)
-                if 0 < n - c < PAD_MIN:
-                    c = n - PAD_MIN
+            while r:
+                c = min(r, PAD_MAX)
+                if 0 < r - c < PAD_MIN:
+                    c = r - PAD_MIN
                 out.extend((SPECIAL_LO[page], pad_y(c)))
                 t += c
-                n -= c
+                r -= c
 
-        out.extend((SETPG_LO[page], BLOCK_AT[0] >> 8))  # leave the player's page
+        out.extend((SETPG_LO[page], BLOCK_AT[0] >> 8))              # leave the player's page
         page, t = BLOCK_AT[0] >> 8, 24
-        qi = 0
+        ci = 0
         for g in range(len(ops) + 1):
-            until = starts[g] if g < len(ops) else (until_end - SETPAGE - END) & ~1
-            while qi < len(queue):
-                a, e, r, src, early, late = queue[qi]
-                if r in failed:
-                    qi += 1
-                    continue
-                wait = max(0, ((early + 1) & ~1) - t)
-                if 0 < wait < PAD_MIN:
-                    wait = PAD_MIN
+            until = starts[g] if g < len(ops) else (LINE_END - SETPAGE - END) & ~1
+            while ci < len(chunks):
+                a, e = chunks[ci]
+                addr0 = SCREEN + a
+                pg = entry(addr0, 1) >> 8                           # the chain's page, for 1 byte
+                n = e - a
                 fit = 0
-                for k in range(e - a, 0, -1):
+                for k in range(n, 0, -1):
                     ent = entry(SCREEN + e - k, k)
-                    c = wait + (SETPAGE if ent >> 8 != page else 0) + PIECE + k * COPY
-                    rest = until - t - c
-                    if rest == 0 or rest >= PAD_MIN:
+                    c = (SETPAGE if ent >> 8 != page else 0) + PIECE + k * COPY
+                    r = until - t - c
+                    if r == 0 or r >= PAD_MIN:
                         fit = k
                         break
                 if not fit:
                     break
-                if late is not None and t + c > late:
-                    failed.add(r)
-                    qi += 1
-                    continue
-                emit_pad(wait)
                 k = fit
                 ent = entry(SCREEN + e - k, k)
                 if ent >> 8 != page:
@@ -839,13 +760,13 @@ class Screen:
                     page = ent >> 8
                     t += SETPAGE
                 out.extend((ent & 255, (SCREEN + e - k) & 255))
-                out.extend(src[e - k:e][::-1])
+                out.extend(cur[e - k:e][::-1])
                 t += PIECE + k * COPY
-                pieces.append((e - k, e))
-                if k == e - a:
-                    qi += 1
+                done.append((e - k, e))
+                if k == n:
+                    ci += 1
                 else:
-                    queue[qi][1] = e - k                # the rest, later
+                    chunks[ci][1] = e - k                              # the rest, later
             emit_pad(until - t)
             if g < len(ops):
                 out.extend((SPECIAL_LO[page], ops[g][1]))
@@ -855,126 +776,20 @@ class Screen:
             t += SETPAGE
         out.extend((L["endf"] & 255, 0))
         t += END
-        left = [q for q in queue[qi:] if q[2] not in failed]
-        failed |= {q[2] for q in left if q[5] is not None}
-        return bytes(out), t, pieces, [q for q in left if q[2] not in failed], failed
+        for a, e in done:
+            self.mem[a:e] = cur[a:e]
+            self.known[a:e] = True
+            self.age[a:e] = 0
+        unequal = np.frombuffer(self.mem, dtype=np.uint8) != np.frombuffer(cur, dtype=np.uint8)
+        left = int((changed & unequal).sum())
+        self.missed = int((must & unequal).sum()) if must is not None else 0
+        return bytes(out), t, int(changed.sum()), left
 
 
 PREDRAW = 12          # MODE 7 frames during which the next mode's first frame is drawn out of sight
 
 
-def row_chunks(changed, rows, src, early):
-    """Queue items for the changed bytes of rows (top down): runs, bridged over gaps of one, in
-    pieces of a chain's length at most."""
-    out = []
-    for r in rows:
-        m = changed[r * ROW:(r + 1) * ROW]
-        d = np.diff(np.concatenate(([0], m.astype(np.int8), [0])))
-        s, e = np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]
-        runs = []
-        for a, b in zip(s, e):
-            if runs and a - runs[-1][1] <= 1:
-                runs[-1][1] = b
-            else:
-                runs.append([a, b])
-        for a, b in runs:
-            for x in range(a, b, CHAIN):
-                out.append([r * ROW + x, r * ROW + min(x + CHAIN, b), r, src, early(r), None])
-    return out
-
-
-def encode_lines_mode(frames, data, ivl, switch, on_frame=None, log=print):
-    """MODE 1 with line palettes, into data; returns (frames, rows held per frame).
-
-    Frame k shows S_k: its colours come with it (the header's for line 0, palette ops for the
-    rest), and its bytes are all in screen memory before the raster gets to them.  A row's
-    bytes for S_{k+1} are written after the raster has drawn the row in frame k and before it
-    comes back to it in frame k+1, so a frame's ops start with the rest of its own bytes (rows
-    lower down, before the raster) and go on to the next frame's (rows above it, behind the
-    raster).  A row whose bytes don't fit in that window is held: it shows exactly what it
-    showed (old bytes, old colours) until a frame has room for it, never old bytes through new
-    colours.  S_0 is black (the first frame, with the mode change, has no line ops), and the
-    rows the picture hasn't reached yet stay black."""
-    lp = LinePalettes()
-    nrow = SCREEN_LEN // ROW
-    age = np.zeros(nrow, int)
-    state, known = bytes(SCREEN_LEN), np.zeros(SCREEN_LEN, bool)       # S_k: what frame k shows
-    pals_k, k, held_log, tail = lp.pals.copy(), 0, [], []
-    hold = set()
-
-    def frame(codes, pals):
-        data.append((switch if k == 1 else ivl) | 0x80)
-        data.extend(ula_palette(1, tuple(int(c) for c in pals[0])))
-        data.extend(codes)
-
-    def changes(cur):
-        return (np.frombuffer(state, np.uint8) != np.frombuffer(cur, np.uint8)) | ~known
-
-    for cut, rgb, *again in frames:
-        again = bool(again and again[0])
-        done_rows = set(range(nrow)) - hold if again else set()   # a repeated picture: only what was held
-        ops = [] if k == 0 else line_ops(pals_k)
-        end = LINE_END - (MODESET if k == 0 else 0)
-        early = (lambda r: 0) if k == 0 else row_drawn
-        held0 = np.zeros(256, bool)
-        for r in done_rows:
-            held0[8 * r:8 * r + 8] = True
-        pals, pix = lp.plan(rgb, cut, held0)
-        ch = changes(bp.pack(pix, 1))
-        rows = [r for r in range(nrow) if ch[r * ROW:(r + 1) * ROW].any()]
-        cost = {r: row_cost(ch[r * ROW:(r + 1) * ROW]) for r in rows}
-        tail_cost = sum(PIECE + (q[1] - q[0]) * COPY for q in tail)
-        cap = 0.9 * (end - 24 - PAL_OP * len(ops) - tail_cost)
-        if cut or sum(cost.values()) > 2 * cap:
-            order = sorted(rows)                       # a cut: a wipe, top down
-        else:
-            order = sorted(rows, key=lambda r: -(age[r] + 1) * cost[r])
-        take, spent = set(), 0
-        for r in order:
-            if spent + cost[r] <= cap:
-                take.add(r)
-                spent += cost[r]
-        hold = (set(rows) - take) | done_rows
-        while True:
-            held = np.zeros(256, bool)
-            for r in hold:
-                held[8 * r:8 * r + 8] = True
-            pals, pix = lp.plan(rgb, cut, held)
-            cur = bp.pack(pix, 1)
-            ch = changes(cur)
-            need = [r for r in range(nrow) if r not in hold and ch[r * ROW:(r + 1) * ROW].any()]
-            codes, t, pieces, rest, failed = Screen.schedule(ops, tail + row_chunks(ch, need, cur, early))
-            assert not failed, ("a promised row missed the raster", k, failed)
-            nxt = [q[:4] + [0, row_start(q[2])] for q in rest]
-            _, _, _, rest2, failed2 = Screen.schedule(line_ops(pals), nxt)
-            failed2 |= {q[2] for q in rest2}
-            if not failed2:
-                break
-            hold |= failed2
-        frame(codes, pals_k)
-        if on_frame:
-            on_frame(1, k, state, None, pals_k)
-        state = cur
-        for r in need:
-            known[r * ROW:(r + 1) * ROW] = True
-        lp.commit(pals, pix)
-        tail = nxt
-        hold -= done_rows                          # (rows already done aren't held, just finished)
-        for r in range(nrow):
-            age[r] = age[r] + 1 if r in hold else 0
-        held_log.append(len(hold))
-        pals_k, k = pals, k + 1
-        if k % 250 == 0:
-            log(f"  MODE 1: {k} frames")
-    codes, t, pieces, rest, failed = Screen.schedule(line_ops(pals_k), tail)    # the last: its own bytes
-    assert not failed and not rest
-    frame(codes, pals_k)
-    if on_frame:
-        on_frame(1, k, state, None, pals_k)
-    return k + 1, np.array(held_log + [0])
-
-
-def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=None):
+def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=None, hold=False):
     """The whole stream for the plan [(mode, seconds), ...], and a report per mode.  A frame's
     header carries the vsyncs to wait for before it: the frame before it has that long to
     draw.  A mode change gets 40 ms: a CRTC change costs a field, after which its frame has one;
@@ -985,8 +800,9 @@ def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=
     data, at, report = bytearray(), start, []
     gens = []
     for mode, secs in plan:
-        gens.append(fields(frames_lines(path, at, secs, fps), round(50 / fps)) if lines and mode == 1 else targets(path, mode, at, secs, fps, table))
+        gens.append(targets_lines(path, at, secs, fps) if lines and mode == 1 else targets(path, mode, at, secs, fps, table))
         at += secs
+    line_enc = LineEncoder()
     for i, (mode, secs) in enumerate(plan):
         m = MODES[mode]
         care = np.zeros(SCREEN_LEN, dtype=bool)
@@ -1003,13 +819,32 @@ def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=
         data += bytes((NEWMODE, (MODE_TABLE[mode] + 1) | (CRTC_TOO if crtc else 0)))
         switch = ivl if crtc else 2 * ivl                  # a CRTC change costs a field; else 40 ms to draw in
         n, backlog, size0 = 0, [], len(data)
-        if lines and mode == 1:
-            n, held = encode_lines_mode(frames, data, 1, 1, on_frame, log)     # (every field has its ops)
-            report.append((mode, n, len(data) - size0, held * ROW))      # the held rows' bytes
-            continue
         for k, fr in enumerate(frames):
-            cut, pal, cur_part = fr[:3]
-            line_ops = fr[3] if len(fr) > 3 and k > 0 else None     # the first frame has the mode change's time
+            line_ops = line_pals = must = None
+            if lines and mode == 1:                        # the first frame has the mode change's time
+                if hold and k > 0 and line_enc.wait.any():   # rows still to draw: this field draws the
+                    fr = (False, held)                       # same frame again (the source frame is dropped)
+                held = fr[1]
+                share = 0.85
+                while True:                                # the rows changing colour must fit: else fewer
+                    enc0, screen0 = copy.deepcopy(line_enc), copy.deepcopy(screen)
+                    pal, cur_part, line_ops, line_pals, must = line_enc.frame(fr[1], fr[0], screen, first=k == 0, share=share)
+                    if k == 0:
+                        break
+                    cur = bytearray(screen.mem)
+                    cur[m["at"]:m["at"] + m["size"]] = cur_part
+                    screen.encode_lines(bytes(cur), line_ops, wipe=fr[0], must=must)
+                    ok = screen.missed == 0
+                    line_enc, screen = enc0, screen0
+                    if ok:
+                        pal, cur_part, line_ops, line_pals, must = line_enc.frame(fr[1], fr[0], screen, first=False, share=share)
+                        break
+                    share *= 0.8
+                cut = fr[0]
+                if k == 0:
+                    line_ops = None
+            else:
+                cut, pal, cur_part = fr
             cur = bytearray(screen.mem)
             cur[m["at"]:m["at"] + m["size"]] = cur_part
             fcare, low = care, None
@@ -1021,7 +856,8 @@ def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=
             vsyncs = switch if k == 0 else ivl
             frame_budget = vsyncs * CYCLES_PER_VSYNC * budget - (PALETTE if pal else 0) - (MODESET if k == 0 else 0)
             if line_ops is not None:
-                codes, cost, changed, left = screen.encode_lines(bytes(cur), line_ops, wipe=cut)
+                codes, cost, changed, left = screen.encode_lines(bytes(cur), line_ops, wipe=cut, must=must)
+                assert screen.missed == 0, f"frame {k}: {screen.missed} bytes of rows changing colour not written"
             else:
                 codes, cost, changed, left = screen.encode(bytes(cur), frame_budget, fcare, low, wipe=cut)
             data.append((switch if k == 1 else ivl) | (0x80 if pal else 0))
@@ -1031,7 +867,7 @@ def encode_all(path, plan, start, fps, budget, log=print, lines=False, on_frame=
             n += 1
             backlog.append(left)
             if on_frame:
-                on_frame(mode, k, bytes(screen.mem), pal, fr[4] if line_ops is not None else None)
+                on_frame(mode, k, bytes(screen.mem), pal, line_pals if line_ops is not None else None)
             if n % 250 == 0:
                 log(f"  MODE {mode}: {n} frames, {(len(data) - size0) // 1024} KB")
         report.append((mode, n, len(data) - size0, np.array(backlog)))
@@ -1050,6 +886,8 @@ def main():
     ap.add_argument("--encode-only", action="store_true")
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--lines", action="store_true", help="MODE 1 with a palette for every line")
+    ap.add_argument("--hold", action="store_true", help="with --lines: when a frame doesn't fit, hold it "
+                    "for another field rather than move on with rows behind")
     o = ap.parse_args()
     plan = [(int(m), float(s)) for m, s in (p.split(":") for p in o.plan.split(","))]
     shows = []
@@ -1057,14 +895,14 @@ def main():
         video, _, at = item.rpartition("@") if "@" in item else (item, "", "")
         start = float(at) if at else o.start
         cache = (f"{video}.{o.plan.replace(':', '-').replace(',', '_')}.s{start:g}.f{o.fps:g}.b{o.budget:g}"
-                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L10' if o.lines else ''}.v3.demo")
+                 f".k{BLACK[0]:g}-{BLACK[1]:g}.c{CONTRAST[0]:g}-{CONTRAST[1]:g}.p{PIVOT[0]:g}{'.L4' if o.lines else ''}{'h' if o.hold else ''}.v3.demo")
         if os.path.exists(cache) and not o.no_cache:
             with open(cache, "rb") as f:
                 data, report = pickle.load(f)
             print(f"encoded already: {cache}")
         else:
             t = time.monotonic()
-            data, report = encode_all(video, plan, start, o.fps, o.budget, lines=o.lines)
+            data, report = encode_all(video, plan, start, o.fps, o.budget, lines=o.lines, hold=o.hold)
             print(f"encoded {video} from {start:g} s in {time.monotonic() - t:.0f} s")
             with open(cache, "wb") as f:
                 pickle.dump((data, report), f)
