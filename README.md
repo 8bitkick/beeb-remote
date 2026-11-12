@@ -67,6 +67,10 @@ bytes that changed, as many as the BBC can copy in a frame. The whole video goes
 Pi1MHz's shared memory first, and a player in the BBC's RAM copies it from there into screen
 memory, with no network traffic and no stops while it plays.
 
+**MODE 7**, teletext
+
+<img src="images/bbb_mode7.gif" alt="Big Buck Bunny in MODE 7" width="640">
+
 **MODE 1, with a palette for every line**
 
 <img src="images/bbb_mode1.gif" alt="Big Buck Bunny in MODE 1 with a palette for every line" width="640">
@@ -161,7 +165,7 @@ It plays through shared memory, without stopping the game:
   window, which shows the page of shared memory the player writes with `POST /bbc/shared` when
   the held keys change.
 - **Stops** come only to patch a code just loaded, at a launch or a dock, and to type a
-  commander's name: about one every 20 s over a career, none in flight.
+  commander's name: about one every 50 s over a career, none in flight.
 
 ```
 ELITE_AGENT=~/elite-agent elite/build.sh
