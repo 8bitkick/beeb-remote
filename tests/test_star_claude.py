@@ -52,8 +52,18 @@ ok(len(sc.CODE) <= 0x100, f"{len(sc.CODE)} bytes, in &0A00-&0AFF")
 ok(sc.intact(sc.hook_bytes(0x1234, 7)), "intact() ignores the vector and the count")
 ok(not sc.intact(sc.hook_bytes(0x1234)[:-1] + b"X"), "and sees a changed byte")
 
-if not os.path.exists(RUN_BEEBJIT):
-    print(f"== *CLAUDE: skipped, no {RUN_BEEBJIT} ==")
+def missing():
+    """What run_beebjit.sh needs and doesn't have, or None."""
+    bj = os.path.expanduser(os.environ.get("BEEBJIT", "~/presto/beebjit-upstream"))
+    if not os.path.exists(os.path.join(bj, "bbc.c")) or not os.path.exists(os.path.join(bj, "roms", "os12.rom")):
+        return f"no beebjit at {bj} (BEEBJIT)"
+    if not os.path.exists(os.path.join(PI1MHZ, "src", "tests", "ramprobe", "board.h")):
+        return f"no Pi1MHz checkout with the probe's test board at {PI1MHZ} (PI1MHZ: ramprobe-fixes or stream-fixes)"
+    return None
+
+
+if missing():
+    print(f"== *CLAUDE: SKIPPED, {missing()} ==")
     sys.exit(1 if fails else 0)
 server = subprocess.Popen(["sh", RUN_BEEBJIT, str(PORT)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 try:

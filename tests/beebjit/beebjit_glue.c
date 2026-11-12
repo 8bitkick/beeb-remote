@@ -2,11 +2,13 @@
    0.90 on the 8271, from a checkout of beebjit.  Built by run_beebjit.sh, which patches
    beebjit's bbc.c to call the four pi1mhz_ functions below.
 
-   The real ramprobe.c, ramprobe_api.c, 6502 code and services_emulator.c, on board.h, with
-   the same HTTP routes as bbcsim.c: /bbc, and what a person does at the machine.
+   The real ramprobe.c, ramprobe_api.c, helpers.c, ram_emulator.c, services_emulator.c and
+   6502code.bin, on the Pi1MHz checkout's test board (src/tests/ramprobe/board.h), with the
+   same HTTP routes as its bbcsim.c: /bbc, and what a person does at the machine.
      POST /sim/type?text=PRINT+1%0D   keys, typed at about 10 a second; answers when done
      GET  /sim/screen                 the MODE 7 screen, as text
      POST /sim/break[?ctrl=1]         Break (Ctrl-Break); answers 3 s later
+     GET  /sim/peek?addr=&len=        BBC RAM, read straight, without a stop (up to 256 bytes)
      POST /sim/quit
    The port is PI1MHZ_PORT in the environment. */
 #include <arpa/inet.h>
@@ -31,6 +33,7 @@ static struct bbc_struct *bbc;
 static struct timing_struct *timing;
 static uint32_t timer;
 static int listener = -1;
+static bool was_reset;
 
 static uint32_t ticks(void) { return timing != NULL ? (uint32_t)timing_get_total_timer_ticks(timing) : 0u; }
 
@@ -68,10 +71,7 @@ void pi1mhz_bus_write(uint16_t addr, uint8_t val) { board_now = ticks(); board_b
 /* nRST: the board sees every reset, a Break or the power coming on. */
 void pi1mhz_bbc_reset(void)
 {
-   if (pi.JIM_ram == NULL) {
-      pi.JIM_ram_size = 2;
-      pi.JIM_ram = calloc(1, 2u * JIM_RAM_STEP);
-   }
+   was_reset = true;
    board_reset();
    mirror();
 }
@@ -229,6 +229,17 @@ static bool sim_route(int fd, bool post, const char *path, const char *query)
       waiting_fd = fd; waiting_for_keys = false; waiting_until = Pi1MHz_now_us + 3000000u;
       return false;
    }
+   if (!post && !strcmp(path, "/sim/peek")) {      /* BBC RAM straight, without a stop */
+      char v[16];
+      unsigned addr = value(query, "addr", v, sizeof v) ? (unsigned)strtoul(v, NULL, 0) : 0u;
+      unsigned len = value(query, "len", v, sizeof v) ? (unsigned)strtoul(v, NULL, 0) : 1u;
+      const uint8_t *ram = bbc_get_mem_read(bbc);
+      size_t o = 0;
+      for (unsigned i = 0; i < len && i < 256u && addr + i < 0x8000u; i++) o += (size_t)snprintf(out + o, sizeof out - o, "%02x", ram[addr + i]);
+      out[o++] = '\n'; out[o] = 0;
+      reply(fd, 200, out);
+      return true;
+   }
    if (post && !strcmp(path, "/sim/quit")) { reply(fd, 200, "{}\n"); exit(0); }
    reply(fd, 404, "No such page.\n");
    return true;
@@ -328,7 +339,7 @@ void pi1mhz_attach(struct bbc_struct *b)
    const char *port = getenv("PI1MHZ_PORT");
    bbc = b;
    timing = bbc_get_timing(b);
-   if (pi.JIM_ram == NULL) pi1mhz_bbc_reset();
+   if (!was_reset) pi1mhz_bbc_reset();
    listener = socket(AF_INET, SOCK_STREAM, 0);
    int yes = 1;
    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);

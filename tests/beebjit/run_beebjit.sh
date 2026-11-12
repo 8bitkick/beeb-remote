@@ -3,7 +3,8 @@
 # kc-beeb is a Master 128.  The real firmware C on board.h, patched into a copy of beebjit, and
 # served over HTTP for the tests here.
 #   BEEBJIT    a beebjit checkout (default: ~/presto/beebjit-upstream)
-#   PI1MHZ     a Pi1MHz checkout on the ramprobe or stream-buffer branch (default: ~/Pi1MHz)
+#   PI1MHZ     a Pi1MHz checkout on ramprobe-fixes, or stream-fixes for the stream buffer
+#              (default: ~/Pi1MHz).  Its test board, stubs and 6502code.bin are used.
 
 #   run_beebjit.sh PORT      just serve it on 127.0.0.1:PORT
 set -e
@@ -11,7 +12,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=${SRC_DIR:-${PI1MHZ:-$HOME/Pi1MHz}/src}
 BEEBJIT=${BEEBJIT:-$HOME/presto/beebjit-upstream}
 if [ ! -f "$BEEBJIT/bbc.c" ] || [ ! -f "$BEEBJIT/roms/os12.rom" ]; then
-   echo "== ramprobe on beebjit: skipped, no beebjit at $BEEBJIT =="
+   echo "== ramprobe on beebjit: SKIPPED, no beebjit at $BEEBJIT =="
    exit 0
 fi
 B=$(mktemp -d)
@@ -76,24 +77,22 @@ void pi1mhz_attach(struct bbc_struct* p_bbc);
 """ + s[k:]
 open(p, 'w').write(s)
 E
-cp "$SRC"/services_emulator.c "$SRC"/services.h "$SRC"/ramprobe.c "$SRC"/ramprobe.h "$SRC"/ramprobe_api.c "$SRC"/ramprobe_api.h "$B/pi/"
-# The probe's 6502 pages: built into the kernel on the ramprobe and stream-buffer branches,
-# helpers of 6502code.bin since the PR #51 review (22 and 23 now).
-if [ -f "$SRC/ramprobe_agent.h" ]; then cp "$SRC/ramprobe_agent.h" "$B/pi/"; fi
-export RAMPROBE_6502CODE="$SRC/../firmware/Pi1MHz/6502code.bin"
-cp -r "$HERE"/stubs/* "$B/pi/"
-cp "$HERE"/board.h "$HERE"/beebjit_glue.c "$B/pi/"
-printf '#include <stddef.h>\n#include <stdint.h>\nvoid helpers_set_page(uint8_t page, const uint8_t *bytes, size_t length);\nint helpers_page_number(uint8_t page);\nint helpers_window_page(void);\nconst uint8_t *helpers_page(uint8_t page);\n' > "$B/pi/helpers.h"
+# The firmware's own C on the Pi1MHz checkout's test board (src/tests/ramprobe), as run_tests.sh
+# builds it for kc-beeb: the real helpers.c and ram_emulator.c, and the SD card's 6502code.bin.
+cp -r "$SRC"/tests/ramprobe/stubs/* "$B/pi/"
+for f in services_emulator.c services.h ramprobe.c ramprobe.h ramprobe_api.c ramprobe_api.h \
+         helpers.c helpers.h ram_emulator.c ram_emulator.h; do cp "$SRC/$f" "$B/pi/"; done
+cp "$SRC"/tests/ramprobe/board.h "$HERE"/beebjit_glue.c "$B/pi/"
+export RAMPROBE_6502CODE=${RAMPROBE_6502CODE:-$SRC/../firmware/Pi1MHz/6502code.bin}
 # beebjit's own files, as its build_headless_opt.sh lists them, then the board's.
 BJ_FILES=$(sed -n '/-o beebjit/,/-lm/p' "$B/bj/build_headless_opt.sh" | tr -d '\\' | tr ' ' '\n' | grep -E '\.(c|S)$')
-for f in services_emulator ramprobe ramprobe_api; do
+for f in services_emulator ramprobe ramprobe_api helpers ram_emulator; do
    gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w -I"$B/pi" -c "$B/pi/$f.c" -o "$B/pi/$f.o"
 done
 gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w $(grep -q ramprobe_api_buffer "$SRC/ramprobe_api.h" && echo -DHAVE_STREAM_BUFFER) -I"$B/pi" -I"$B/bj" -c "$B/pi/beebjit_glue.c" -o "$B/pi/beebjit_glue.o"
 (cd "$B/bj" && gcc -O2 -g -DNDEBUG -DBEEBJIT_HEADLESS -fno-pie -no-pie -Wa,--noexecstack -w -o "$B/beebjit" \
     $BJ_FILES "$B"/pi/*.o -lm -lpthread) 2> "$B/build.log" || { cat "$B/build.log"; exit 1; }
 cd "$B/bj"
-# BEEBJIT_ARGS: more of beebjit's own, e.g. -frame-cycles N -max-frames M -frames-dir D to save frames
-run() { PI1MHZ_PORT=$1 exec "$B/beebjit" -headless -mode ${BEEBJIT_MODE:-interp} -max-frames 4000000000 -exit-on-max-frames ${BEEBJIT_ARGS:-}; }
+run() { PI1MHZ_PORT=$1 exec "$B/beebjit" -headless -mode ${BEEBJIT_MODE:-interp} -max-frames 4000000000 -exit-on-max-frames; }
 if [ -n "$1" ]; then run "$1"; fi
 echo "usage: run_beebjit.sh PORT"; exit 1
