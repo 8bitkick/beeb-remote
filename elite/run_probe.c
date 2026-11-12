@@ -1,15 +1,16 @@
-// The C player on a real BBC Micro Model B, through the Pi1MHz RAM probe (Pi1MHz PR #51 with the
-// stream buffer, docs/dev/ramprobe.md there; elite/README.md here).  No ROM, no keyboard rig.
+// The C player on a real BBC Micro Model B, through the Pi1MHz RAM probe and its shared memory
+// (Pi1MHz PR #51, docs/dev/ramprobe.md there; elite/README.md here).  No ROM, no keyboard rig.
 //   run_probe HOST[:PORT] [minutes] [journal.jsonl]
 // BOOT=1 loads Elite from the disc first, from BASIC's prompt with the probe installed
 // (X%=23:CALL &FC88).  Model B disc Elite (flicker-free) only.
 //
 // The game isn't stopped while it plays.  A routine patched into each code, where its joystick
-// code was, copies the RAM the player reads into the Pi1MHz's memory through the services port
-// each time Elite asks for a key press (RDKEY: once a main-loop iteration, and in every screen
-// that waits for a key), and this program fetches it over HTTP.  Keys go the other way: Elite's
-// key routine, DKS4, is patched to look its key up in a list in the &FD00 window, which shows a
-// page of the probe's stream buffer, and this program writes the list with POST /bbc/buffer.
+// code was, copies the RAM the player reads into the Pi1MHz's shared memory through the services
+// port each time Elite asks for a key press (RDKEY: once a main-loop iteration, and in every
+// screen that waits for a key), and this program reads it with GET /bbc/shared.  Keys go the
+// other way: Elite's key routine, DKS4, is patched to look its key up in a list in the &FD00
+// window, which shows a page of shared memory, and this program writes the list with
+// POST /bbc/shared.
 // The probe stops the BBC only to patch a code just loaded, and to type the commander's name
 // into the OS's keyboard buffer.
 #define _GNU_SOURCE
@@ -180,8 +181,8 @@ static void resume(void) {
     if (t > s_stop_longest) s_stop_longest = t;
 }
 
-// bytes from the probe's data buffer, from offset (GET /bbc/data, which serves it up to the last
-// peek's length): 0, or -1
+// bytes from the probe's transfer buffer, from offset (GET /bbc/data, which serves the last peek's
+// bytes, up to its length): 0, or -1
 static int data(int offset, int total, uint8_t *out) {
     static char hex[8200];
     char path[100];
@@ -196,6 +197,32 @@ static int data(int offset, int total, uint8_t *out) {
         }
     }
     return 0;
+}
+
+// bytes of shared memory, from offset (GET /bbc/shared, no stop): 0, or -1
+static int shared_get(int offset, int total, uint8_t *out) {
+    static char hex[8200];
+    char path[100];
+    for (int off = 0; off < total; off += 4096) {
+        int n = total - off < 4096 ? total - off : 4096;
+        snprintf(path, sizeof path, "/bbc/shared?offset=%d&len=%d", offset + off, n);
+        if (http("GET", path, hex, sizeof hex) != 200 || (int) strlen(hex) < 2 * n) return -1;
+        for (int i = 0; i < n; i++) {
+            unsigned v;
+            sscanf(hex + 2 * i, "%2x", &v);
+            out[off + i] = (uint8_t) v;
+        }
+    }
+    return 0;
+}
+
+// bytes into shared memory at offset (POST /bbc/shared, the bytes as the body, no stop): 0, or -1
+static int shared_put(int offset, const uint8_t *bytes, int n) {
+    char path[80], ans[512];
+    snprintf(path, sizeof path, "/bbc/shared?offset=%d", offset);
+    if (http_body("POST", path, bytes, (size_t) n, ans, sizeof ans) == 200) return 0;
+    fprintf(stderr, "POST /bbc/shared: %s\n", ans);
+    return -1;
 }
 
 // the ranges' bytes, back to back into out.  halted: the machine already stopped; otherwise one
@@ -234,12 +261,20 @@ static int poke(const range_t *r, int nr, const uint8_t *bytes, char *err, size_
 
 static void must(int ok, const char *what, const char *err) { if (ok) die("%s: %s", what, err); }
 
-// ---- the mirror: what the copy routine writes into the probe's data buffer
+// ---- shared memory, as this program lays it out (GET /bbc's shared: its services offset, which
+// the BBC's services port takes, and its JIM address, which the window's page registers take)
 //
-// The data buffer (services offset &E00100, the probe's report + &100) is where a peek leaves its
-// bytes, and GET /bbc/data serves it up to the last peek's length; a poke leaves it serving none.
-// So every stop here ends with a peek of at least PAD_PEEK bytes, which the routine then writes
-// over.  Its bytes, in order:
+// The input page, at +&0000: the window.  DKS4 reads the held keys from it through &FD00, and
+// RDKEY its answer; this program writes it with POST /bbc/shared.  The Pi copies the page into
+// the window when a JIM page register is written, so both write &FCFF first.
+#define KEYPAGE_OFF 0x000
+#define WIN_LIST 0x00                // &FD00-&FD05: the keys held (&FF for none)
+#define WIN_RDKEY 0x08               // &FD08: what RDKEY returns: the lowest key held from 16 up, or 0
+#define WIN_MAGIC 0x10               // &FD10: copied into the docked code's mirror
+#define NLIST 6                      // keys held at once: the player holds six at most
+//
+// The state mirror, at +&0100: what the copy routine writes through the services port, and this
+// program reads with GET /bbc/shared.  Its bytes, in order:
 //   a sequence number, one more each time;
 //   for X = 0 to &BB: zero page &00+X, page 3 &0311+X (FRIN to JSTK), and in the flight code K%
 //     &0900+X (the first five ship blocks);
@@ -247,31 +282,18 @@ static void must(int ok, const char *what, const char *err) { if (ok) die("%s: %
 //   docked: NA% (&1181, 84 bytes: the last save); ALTIT; the byte at &FD10 (the window's: the
 //     check that it shows our page);
 //   the sequence number again.  The two match only in a whole copy.
-// What the player reads, from its own read audit (elite-agent's cplayer/audit.h, run_sim_b built with
-// -DREAD_AUDIT): zero page to &8E, FRIN, page 3 from JUNK to JSTK (NAME among it), ALTIT, the
+// What the player reads, from its own read audit (elite-agent's cplayer/audit.h, run_sim_b built
+// with -DREAD_AUDIT): zero page to &8E, FRIN, page 3 from JUNK to JSTK (NAME among it), ALTIT, the
 // ship blocks in use, and NA% after a save.
+#define MIRROR_OFF 0x100
 #define SPAN 0xBC
 #define FLIGHT_SHORT (1 + 3 * SPAN + 1)                // where the second number is, with five blocks
 #define FLIGHT_LONG (FLIGHT_SHORT + 256)               // with twelve
 #define DOCKED_END (1 + 2 * SPAN + 0x54 + 2)
 #define MIRROR_MAX (FLIGHT_LONG + 1)
-// It's at &400 in the data buffer (services offset &E00500), not at its start, so a peek of up to
-// 1 KB by another client, with GET /bbc/data straight after it, is never written over.  A longer
-// peek is (from &400 on): halt first, peek, read the data, and continue.  run_probe's own peeks all
-// halt first, and end with one of at least PAD_PEEK bytes so the mirror is served.
-#define MIRROR_OFF 0x400
-#define PAD_PEEK (MIRROR_OFF + MIRROR_MAX)
 
-// ---- the window: a page of the stream buffer that &FD00 shows.  DKS4 reads the held keys from
-// it, and RDKEY its answer; this program writes it with POST /bbc/buffer.  The Pi copies the page
-// into the window when a JIM page register is written, so both write &FCFF first.
-#define KEYPAGE_OFF 0x500            // its offset in the stream buffer: JIM page &hh4005
-#define KEYPAGE_LO 0x05              // (the mirror's middle address byte too: one LDA for both)
-#define KEYPAGE_MID 0x40             // the stream buffer is at services offset &400000
-#define WIN_LIST 0x00                // &FD00-&FD05: the keys held (&FF for none)
-#define WIN_RDKEY 0x08               // &FD08: what RDKEY returns: the lowest key held from 16 up, or 0
-#define WIN_MAGIC 0x10               // &FD10: copied into the docked code's mirror
-#define NLIST 6                      // keys held at once: the player holds six at most
+_Static_assert(KEYPAGE_OFF < 0x100 && (MIRROR_OFF & 0xFF) == 0, "the copy routine's LDX #0 sets both low bytes");
+static uint32_t s_shared_at, s_shared_jim;   // shared memory's services offset and JIM address
 
 // ---- the patches, in each code (Moxon's flight and docked sources; disc-ff-compile.txt)
 
@@ -289,7 +311,7 @@ static void dks4_patch(uint8_t *p) {
     const uint8_t code[25] = {
         0x8A,                                        // TXA
         0x29, 0x7F,                                  // AND #&7F
-        0xA2, KEYPAGE_LO, 0x8E, 0xFF, 0xFC,          // LDX #5: STX &FCFF (the window afresh)
+        0xA2, 0x00, 0x8E, 0xFF, 0xFC,                // LDX #0: STX &FCFF (the window afresh: the input page's low page register)
         0xA2, NLIST - 1,                             // LDX #5
         0xDD, WIN_LIST, 0xFD,                        // .l CMP &FD00,X
         0xF0, 0x04,                                  // BEQ down
@@ -345,11 +367,14 @@ static const fix_t JFIX[2][NFIX] = {
 // next; RDKEY is its entry, and it returns RDKEY's answer.  It copies at most once a frame: only
 // if DL (&8B) is set, which Elite's IRQ sets at each vsync and only WSCAN otherwise touches (it
 // clears it and waits for the next), and it clears it.  So a screen that calls RDKEY over and over
-// (waiting for a key to be let go, say) copies once a frame, not back to back, and the buffer is
+// (waiting for a key to be let go, say) copies once a frame, not back to back, and the mirror is
 // whole most of the time.  It uses A and X; Y is kept, as RDKEY keeps it.  It needs the window's
 // JIM page's top two registers set already (BOOT types them at BASIC's prompt; nothing in Elite
 // or the DFS changes them, and a probe stop puts the page back as it found it); it writes the
-// third, which copies the page into the window afresh.  Each unit stays in one region, a loop's
+// third, which copies the page into the window afresh.  The mirror's address goes into the
+// services port byte by byte, from the top.  Shared memory starts on a 64 KB boundary (checked at
+// the start), so the mirror's low byte and the input page's low page register are both 0: one
+// LDX #0 for them and DL, which keeps the routine as short as the regions need.  Each unit stays in one region, a loop's
 // branch with it.
 typedef struct { uint8_t b[24]; uint8_t n; int8_t fix[2]; uint8_t to[2]; } unit_t;
 enum { TO_SEQ, TO_TAIL };
@@ -361,9 +386,11 @@ static void build_copy(int docked) {
 #define FIX(k, off, what) (u[nu - 1].fix[k] = (off), u[nu - 1].to[k] = (what))
     U(0xA5, 0x8B, 0xD0, 0x03, 0x4C, 0, 0);                      // LDA DL: BNE go: JMP tail: .go
     FIX(0, 5, TO_TAIL);
-    U(0xA9, 0xE0, 0x8D, 0xA8, 0xFC);                            // LDA #&E0: STA &FCA8   the services port at &E00500,
-    U(0xA9, KEYPAGE_LO, 0x8D, 0xA7, 0xFC, 0x8D, 0xFF, 0xFC);    // LDA #5: STA &FCA7: STA &FCFF   and the window afresh
-    U(0xA2, 0x00, 0x8E, 0xA6, 0xFC, 0x86, 0x8B);                // LDX #0: STX &FCA6: STX DL
+    uint32_t mirror = s_shared_at + MIRROR_OFF;
+    U(0xA9, (uint8_t) (mirror >> 16), 0x8D, 0xA8, 0xFC);        // LDA #hi: STA &FCA8   the services port at the mirror
+    U(0xA9, (uint8_t) (mirror >> 8), 0x8D, 0xA7, 0xFC);         // LDA #mid: STA &FCA7
+    U(0xA2, 0x00, 0x8E, 0xA6, 0xFC, 0x8E, 0xFF, 0xFC, 0x86, 0x8B);   // LDX #0: STX &FCA6: STX &FCFF   its low byte; the window afresh
+                                                                // STX DL
     U(0xEE, 0, 0, 0xAD, 0, 0, 0x8D, 0xA9, 0xFC);                // INC seq: LDA seq: STA &FCA9
     FIX(0, 1, TO_SEQ), FIX(1, 4, TO_SEQ);
     if (!docked) {
@@ -501,15 +528,16 @@ static void type_text(const char *text) {
     }
 }
 
-static void boot(uint8_t hi) {
+static void boot(void) {
     char err[200];
     uint8_t v[2];
     range_t r = {0xFFFC, 2};
     must(peek(&r, 1, v, err, sizeof err), "reset vector", err);
     if (v[0] != 0xCD || v[1] != 0xD9) die("not a Model B with MOS 1.20 (reset vector &%02X%02X)", v[1], v[0]);
-    // the window's JIM page (&hh4001: a page of the stream buffer), where DKS4 and RDKEY will read the keys
+    // the window's JIM page: the input page in shared memory, where DKS4 and RDKEY will read the keys
+    uint32_t page = s_shared_jim + KEYPAGE_OFF;
     char line[80];
-    snprintf(line, sizeof line, "?&FCFD=%u:?&FCFE=%u:?&FCFF=%u\r", hi, KEYPAGE_MID, KEYPAGE_LO);
+    snprintf(line, sizeof line, "?&FCFD=%u:?&FCFE=%u:?&FCFF=%u\r", page >> 24, page >> 16 & 255, page >> 8 & 255);
     printf("boot: %.*s\n", (int) strlen(line) - 1, line);
     type_text(line);
     printf("boot: *LOAD ELITE2\n"), fflush(stdout);
@@ -536,28 +564,6 @@ static void boot(uint8_t hi) {
     type_text("CALL &2F23\r");
 }
 
-// ---- the window's JIM page: the stream buffer's, which is 32 MB below the top of the Pi's JIM
-// RAM (DISC_RAM_BASE), so its top byte is the RAM's size in 16 MB, less 2.  The Pi1MHz gives
-// the size through its status port (write 0, Rampage's number, to &FCCA, and &FCCB reads it),
-// which the BBC reads in one stop at the start.  JIMHI= sets it instead.
-static uint8_t jim_hi(void) {
-    if (getenv("JIMHI")) return (uint8_t) strtol(getenv("JIMHI"), NULL, 0);
-    char err[200];
-    long pc;
-    int size = -1;
-    if (!halt(&pc, err, sizeof err)) {
-        // LDA #0: STA &FCCA: LDX #20: .w DEX: BNE w (for the FIQ): LDA &FCCB: RTS
-        if (!act("/bbc/run?hex=A9008DCAFCA214CAD0FDADCBFC60&wait=1", err, sizeof err)) {
-            const char *res = strstr(s_st, "\"result\":");
-            if (res) size = (int) json_num(res, "a");
-        }
-        resume();
-    }
-    if (size >= 2 && size <= 31) return (uint8_t) (size - 2);
-    printf("the Pi1MHz's status port gave %d for its JIM RAM size: taking 2 (32 MB), as on the test board (JIMHI= sets it)\n", size);
-    return 0;
-}
-
 // ---- patching a code that has just been loaded
 
 static int s_live = -1;                // which code is patched (0 flight, 1 docked), -1 none known
@@ -565,25 +571,7 @@ static int s_dks4_done[2];             // its DKS4 patched too
 static uint32_t s_fresh;               // fresh copies seen
 static int s_known;                    // the version found (elite_detect)
 static uint8_t s_ver[0x8000];          // the stretches its check hashes, as last read
-static uint8_t s_after_peek[MIRROR_MAX];  // the mirror's part of the data buffer as the last peek left it: no copy
 static uint32_t s_patches, s_checks;
-
-// the ranges and enough of zero page after them to make PAD_PEEK bytes (r has room for one more
-// range), with the machine
-// stopped; the data buffer as it's left kept in s_after_peek
-static int peek_padded(range_t *r, int nr, uint8_t *got, char *err, size_t errn) {
-    int total = 0;
-    for (int i = 0; i < nr; i++) total += r[i].n;
-    if (total < PAD_PEEK) r[nr++] = (range_t) {0x0000, (uint16_t) (PAD_PEEK - total)};
-    if (peek_halted(r, nr, got, err, errn)) return -1;
-    memcpy(s_after_peek, got + MIRROR_OFF, MIRROR_MAX);
-    return 0;
-}
-static int pad_peek(char *err, size_t errn) {
-    static uint8_t got[PAD_PEEK];
-    range_t r[1];
-    return peek_padded(r, 0, got, err, errn);
-}
 
 static int in_code(long pc, int c) {
     if (pc >= DKS4_AT[c] && pc < DKS4_AT[c] + 25) return 1;
@@ -614,7 +602,7 @@ static void check_and_patch(void) {
     int ncode = nr;
     if (!s_known) r[nr++] = (range_t) {0x0400, 256}, r[nr++] = (range_t) {0x2000, 256}, r[nr++] = (range_t) {0x3000, 256};
     static uint8_t got[4096];
-    if (peek_padded(r, nr, got, err, sizeof err)) { fprintf(stderr, "check: %s\n", err); resume(); return; }
+    if (peek_halted(r, nr, got, err, sizeof err)) { fprintf(stderr, "check: %s\n", err); resume(); return; }
     int off = 0, as_loaded[2] = {1, 1}, dks4_loaded[2] = {0, 0}, patched[2] = {0, 0};
     for (int i = 0; i < ncode; i++) {
         int c = rc[i], g = rg[i];
@@ -653,7 +641,6 @@ static void check_and_patch(void) {
         }
     }
     if (nw && poke_how(w, nw, bytes, err, sizeof err, 1)) fprintf(stderr, "patch: %s\n", err), routine = dks4 = 0;
-    if (nw && pad_peek(err, sizeof err)) fprintf(stderr, "check: %s\n", err);
     resume();
     if (c >= 0) {
         if (routine || patched[c]) {
@@ -670,20 +657,19 @@ static void check_and_patch(void) {
 }
 
 // ---- reading the mirror: 1 a fresh whole copy (into s_ram), 0 the last one again, -2 a copy under
-// way, -1 none (the data buffer holding a peek's bytes, or serving too few)
+// way, -1 none (no code patched yet, or no answer)
 static uint8_t s_last_seq, s_magic_seen;
 static int s_have_seq;
-static uint32_t s_torn, s_fetches, s_fetch_fail, s_fetch_peek, s_fetch_same;
+static uint32_t s_torn, s_fetches, s_fetch_fail, s_fetch_same;
 static double s_last_fresh;            // when the last fresh copy came
 static int fetch_mirror(void) {
     static uint8_t m[MIRROR_MAX];
     s_fetches++;
     if (s_live < 0) return -1;
-    if (data(MIRROR_OFF, MIRROR_MAX, m)) { s_fetch_fail++; return -1; }
+    if (shared_get(MIRROR_OFF, MIRROR_MAX, m)) { s_fetch_fail++; return -1; }
     int end;
     if (s_live == 0) end = m[2 + 3 * (0x315 - 0x311)] ? FLIGHT_LONG : FLIGHT_SHORT;     // FRIN+4 as copied
     else end = DOCKED_END;
-    if (!memcmp(m, s_after_peek, (size_t) end + 1)) { s_fetch_peek++; return -1; }
     if (m[0] != m[end]) { s_torn++; return -2; }
     if (s_have_seq && m[0] == s_last_seq) { s_fetch_same++; return 0; }
     s_last_seq = m[0], s_have_seq = 1;
@@ -724,9 +710,7 @@ static void write_keys(int force) {
     w[WIN_RDKEY] = (uint8_t) first;
     w[WIN_MAGIC] = s_magic;
     if (!force && s_win_valid && !memcmp(w, s_win_sent, sizeof w)) return;
-    char path[80], ans[512];
-    snprintf(path, sizeof path, "/bbc/buffer?offset=%d", KEYPAGE_OFF);
-    if (http_body("POST", path, w, sizeof w, ans, sizeof ans) != 200) { fprintf(stderr, "keys: %s\n", ans); return; }
+    if (shared_put(KEYPAGE_OFF, w, sizeof w)) return;
     memcpy(s_win_sent, w, sizeof w), s_win_valid = 1;
     s_key_writes++;
 }
@@ -739,9 +723,9 @@ static int type_now(void) {
     long pc;
     if (halt(&pc, err, sizeof err)) { fprintf(stderr, "typing: %s\n", err); return 0; }
     if (pc < 0xC000) { resume(); return 0; }
-    range_t r[3] = {{KEYBUF_START, 1}, {KEYBUF_END, 1}};      // (and room for the padding)
-    static uint8_t got[PAD_PEEK];
-    if (peek_padded(r, 2, got, err, sizeof err)) { fprintf(stderr, "typing: %s\n", err); resume(); return 0; }
+    range_t r[2] = {{KEYBUF_START, 1}, {KEYBUF_END, 1}};
+    uint8_t got[2];
+    if (peek_halted(r, 2, got, err, sizeof err)) { fprintf(stderr, "typing: %s\n", err); resume(); return 0; }
     int start = got[0], y = got[1], used = (y - start + 32) & 31, n = 0;
     range_t w[40];
     uint8_t bytes[64];
@@ -759,7 +743,6 @@ static int type_now(void) {
         w[nw++] = (range_t) {KEYBUF_END, 1};
         bytes[nd++] = (uint8_t) y;
         if (poke_how(w, nw, bytes, err, sizeof err, 1)) fprintf(stderr, "typing: %s\n", err);
-        if (pad_peek(err, sizeof err)) fprintf(stderr, "typing: %s\n", err);
     }
     resume();
     return 1;
@@ -771,13 +754,13 @@ static void diag(const char *line) {
     (void) line;
     if (halt(&pc, err, sizeof err)) return;
     long sp = json_num(s_st, "s");
-    range_t r[9] = {{0x0087, 1}, {0x008A, 1}, {0x008E, 1}, {0x03CB, 1}, {0x008B, 1}, {0x01E0, 32}};
+    range_t r[8] = {{0x0087, 1}, {0x008A, 1}, {0x008E, 1}, {0x03CB, 1}, {0x008B, 1}, {0x01E0, 32}};
     int nr = 6;
     int c = s_live >= 0 ? s_live : 1;
     r[nr++] = (range_t) {REGION[c][0].at, 15};
     r[nr++] = (range_t) {DKS4_AT[c], 25};
-    static uint8_t got[PAD_PEEK + 64];
-    if (!peek_padded(r, nr, got, err, sizeof err)) {
+    static uint8_t got[128];
+    if (!peek_halted(r, nr, got, err, sizeof err)) {
         uint8_t d4[25];
         dks4_patch(d4);
         printf("        diag: pc &%04lX s &%02lX qq11 %02X mcnt %02X qq12 %02X jstk %02X dl %02X; rdkey %s, dks4 %s; stack",
@@ -786,8 +769,8 @@ static void diag(const char *line) {
         for (int i = 0; i < 32; i++) printf(" %02X", got[5 + i]);
         printf("; window list");
         for (int i = 0; i < NLIST; i++) printf(" %02X", s_win_sent[WIN_LIST + i]);
-        printf(" rdkey %02X; the player sees qq11 %02X, a fresh copy %.2f s ago; fetches %u: %u failed, %u a peek's, %u mid-copy, %u the same\n",
-               s_win_sent[WIN_RDKEY], s_ram[0x87], now_s() - s_last_fresh, s_fetches, s_fetch_fail, s_fetch_peek, s_torn, s_fetch_same);
+        printf(" rdkey %02X; the player sees qq11 %02X, a fresh copy %.2f s ago; fetches %u: %u failed, %u mid-copy, %u the same\n",
+               s_win_sent[WIN_RDKEY], s_ram[0x87], now_s() - s_last_fresh, s_fetches, s_fetch_fail, s_torn, s_fetch_same);
     }
     resume();
 }
@@ -816,7 +799,11 @@ int main(int argc, char **argv) {
     char st[2048];
     if (http("GET", "/bbc", st, sizeof st) != 200) die("no probe at %s:%d", s_host, s_port);
     if (!strstr(st, "\"installed\":true")) die("the probe isn't installed: type X%%=23:CALL &FC88 at the BBC's BASIC prompt");
-    if (!strstr(st, "\"buffer\":")) die("this probe has no stream buffer (POST /bbc/buffer): it needs Pi1MHz's stream-fixes or later");
+    const char *sh = strstr(st, "\"shared\":{");
+    if (!sh) die("this probe has no shared memory (GET /bbc's shared): it needs newer Pi1MHz firmware");
+    s_shared_at = (uint32_t) json_num(sh, "at"), s_shared_jim = (uint32_t) json_num(sh, "jim");
+    if ((s_shared_at | s_shared_jim) & 0xFFFF)
+        die("shared memory at services &%06X, JIM &%08X: the patches want it on a 64 KB boundary", s_shared_at, s_shared_jim);
     for (int c = 0; c < 2; c++)
         for (int g = 0; g < NREG; g++)
             for (int i = 0; i < REGION[c][g].n; i++) {
@@ -824,7 +811,6 @@ int main(int argc, char **argv) {
                 sscanf(REGION[c][g].was + 2 * i, "%2x", &v);
                 s_was[c][g][i] = (uint8_t) v;
             }
-    uint8_t hi = jim_hi();
     build_copy(0), build_copy(1);
     if (getenv("PROBELOG"))
         for (int c = 0; c < 2; c++)
@@ -834,17 +820,17 @@ int main(int argc, char **argv) {
                     for (int i = 0; i < REGION[c][g].n; i++) printf(" %02X", s_code[c][g][i]);
                     printf("\n");
                 }
-    // the window's page: all 0 but the list, so its last byte isn't the agent page's number (the
-    // probe's way in waits for 22 at &FDFF)
+    // the input page: all 0 but the list, so its last byte isn't the agent page's number (the
+    // probe's way in waits for 22 at &FDFF).  And the mirror: a sequence number at its start that
+    // none of its ends matches, so it reads as a copy under way until the routine's first.
     {
-        static uint8_t page[256];
-        memset(page + WIN_LIST, 0xFF, NLIST);
-        char path[80], ans[512];
-        snprintf(path, sizeof path, "/bbc/buffer?offset=%d", KEYPAGE_OFF);
-        if (http_body("POST", path, page, sizeof page, ans, sizeof ans) != 200) die("POST /bbc/buffer: %s", ans);
+        static uint8_t init[MIRROR_OFF + MIRROR_MAX];
+        memset(init + KEYPAGE_OFF + WIN_LIST, 0xFF, NLIST);
+        init[MIRROR_OFF] = 1;
+        if (shared_put(KEYPAGE_OFF, init, sizeof init)) die("can't write shared memory");
     }
     write_keys(1);
-    if (getenv("BOOT")) boot(hi);
+    if (getenv("BOOT")) boot();
     signal(SIGINT, on_signal), signal(SIGTERM, on_signal);
 
     io.ram = s_ram;
@@ -882,8 +868,8 @@ int main(int argc, char **argv) {
             if (s_live == 1) {
                 if (s_magic_seen != s_magic) {
                     if (++magic_bad == 100)
-                        fprintf(stderr, "the window doesn't show the keys' page (&FD10 copied as &%02X, not &%02X): is JIMHI right? "
-                                "Its page registers are set at BASIC's prompt (BOOT=1)\n", s_magic_seen, s_magic);
+                        fprintf(stderr, "the window doesn't show the input page (&FD10 copied as &%02X, not &%02X): "
+                                "its page registers are set at BASIC's prompt (BOOT=1)\n", s_magic_seen, s_magic);
                 } else magic_bad = 0;
             }
         }

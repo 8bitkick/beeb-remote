@@ -1,21 +1,37 @@
-# On a real BBC Micro, through the Pi1MHz RAM probe
+# Elite on a real BBC Micro, through shared memory
 
 `elite/run_probe` plays disc Elite on a physical BBC Micro Model B. It runs the same player as
-`run_sim` on another computer (a Pi, a Mac), and reaches the BBC over the network through the
-[Pi1MHz](https://github.com/dp111/Pi1MHz) RAM probe ([PR #51](https://github.com/dp111/Pi1MHz/pull/51),
-with the stream buffer, `POST /bbc/buffer`). There's no ROM to fit and no keyboard rig: the Pi1MHz on
-the 1 MHz bus is the only hardware. The game isn't stopped while it plays: it runs at its own speed,
-dogfights and all.
+elite-agent's `run_sim` on another computer (a Pi, a Mac), and reaches the BBC over the network
+through the [Pi1MHz](https://github.com/dp111/Pi1MHz) RAM probe ([PR #51](https://github.com/dp111/Pi1MHz/pull/51))
+and its shared memory. There's no ROM to fit and no keyboard rig: the Pi1MHz on the 1 MHz bus is the
+only hardware. The game isn't stopped while it plays: it runs at its own speed, dogfights and all.
+
+The player itself, its tuning and its careers are elite-agent's. This directory is its platform for
+a real BBC: `run_probe.c`, built against an elite-agent checkout by `build.sh` (`ELITE_AGENT`,
+default `~/elite-agent`), and its test on beebjit.
 
 ```sh
 ELITE_AGENT=~/elite-agent elite/build.sh      # run_probe (no emulator in it)
 # on the BBC, at BASIC's prompt with the Elite disc in drive 0:  X%=23:CALL &FC88
-BOOT=1 elite/run_probe pi1mhz.local 60 journal.jsonl
+SAVE=0 BOOT=1 elite/run_probe Pi1MHz.local 60 journal.jsonl
 ```
 
 `BOOT=1` loads Elite from the disc; without it the player picks up a game already running (one this
 program booted earlier). The other arguments are `run_sim`'s: game minutes, and the journal. `NAME=`
-and `SAVE=` work as there.
+and `SAVE=` work as there. Use `SAVE=0` under MMFS (see [Limits](#limits)).
+
+## Shared memory
+
+`GET /bbc` gives shared memory's services offset (for the services port) and its JIM address (for
+the `&FD00` window's page registers). `run_probe` lays out two parts of it:
+
+| Offset | What | The BBC | This program |
+|---|---|---|---|
+| `+&0000` | the input page: six held keys at `&00`, `RDKEY`'s answer at `&08`, a check byte at `&10` | reads it through the `&FD00` window | writes it with `POST /bbc/shared` when the keys change |
+| `+&0100` | the state mirror: Elite's RAM the player reads, about 570 bytes in flight | writes it through the services port, once a main-loop iteration | reads it with `GET /bbc/shared`, about once a frame |
+
+Neither is ever written by a peek or a poke, which use the probe's own transfer buffer, so other
+clients can stop the BBC and look while Elite plays.
 
 ## What it does to the BBC
 
@@ -26,39 +42,26 @@ machine again. So `run_probe` types `*LOAD ELITE2`, changes one instruction in i
 table's length, becomes `CPY #6`, so the copy stops after `USERV`, `BRKV` and `IRQ1V`), and types
 `CALL &2F23`, its entry point. The other vectors keep what BASIC and the DFS gave them, which is the
 state any program starts in. Nothing else of the loader is changed. Before all that it types
-`?&FCFD=hh:?&FCFE=64:?&FCFF=5`, which points the `&FD00` window at a page of the probe's stream buffer
-(below).
+`?&FCFD=..:?&FCFE=..:?&FCFF=..`, which points the `&FD00` window at the input page (below).
 
 **RAM out, without stopping.** The probe can't see the BBC's RAM: the 1 MHz bus carries only FRED and
 JIM, and a peek stops the BBC (a rung 1 IRQ, with interrupts off for a few ms). So `run_probe` patches a
-small routine into Elite that copies what the player reads to the Pi1MHz itself, through the services
-port (`&FCA6-&FCA8` the address, `&FCA9` a byte a write, the address going up by one each time), into
-the probe's data buffer: the buffer a peek leaves its bytes in, and the only Pi memory `GET /bbc/data`
-serves. It writes from `&400` in it (services offset `&E00500`), not from its start (below). This program fetches it over HTTP about once a frame. What it copies is what
-the player reads, found by its read audit (elite-agent's `cplayer/audit.h`, `run_sim_b` built with `-DREAD_AUDIT`):
-zero page to `&BB`, page 3 from `FRIN` to `JSTK` (`&0311-&03CC`), `ALTIT`, and in flight the ship blocks
-at `K%` (the first five always, the next seven when `FRIN` says a fifth is in use); docked, `NA%` (the
-last save) instead. A sequence number goes first and again last: the two match only in a whole copy.
-About 570 bytes a copy in flight (830 among many ships), 460 docked.
-
-**Sharing the data buffer.** A peek by any client leaves its bytes in the same buffer, from its start,
-and `GET /bbc/data` serves no more than the last peek's length. So:
-
-- A client that peeks while Elite runs, then reads `/bbc/data`, gets its own bytes as long as the peek
-  is no more than 1 KB (`&400`), below the mirror. A longer peek has the mirror written over its bytes
-  from `&400` on, as soon as Elite next calls `RDKEY`: halt the BBC first, peek, read the data, and
-  continue, and the routine can't run in between.
-- run_probe's own peeks all halt first, and each stop ends with a peek of at least `&400` plus the
-  mirror's length, so `/bbc/data` serves the mirror again. Another client's peek leaves it serving
-  less: the copies then seem to stop, and the next check (a stop) puts it right.
+small routine into Elite that copies what the player reads to the state mirror in shared memory,
+through the services port (`&FCA6-&FCA8` the address, `&FCA9` a byte a write, the address going up by
+one each time). This program reads it over HTTP about once a frame. What it copies is what the
+player reads, found by its read audit (elite-agent's `cplayer/audit.h`, `run_sim_b` built with
+`-DREAD_AUDIT`): zero page to `&BB`, page 3 from `FRIN` to `JSTK` (`&0311-&03CC`), `ALTIT`, and in flight
+the ship blocks at `K%` (the first five always, the next seven when `FRIN` says a fifth is in use);
+docked, `NA%` (the last save) instead. A sequence number goes first and again last: the two match
+only in a whole copy. About 570 bytes a copy in flight (830 among many ships), 460 docked.
 
 The routine runs from Elite's `RDKEY`, which every key wait calls: once a main-loop iteration (from
 `DOKEY`, through `DK4`), and in every screen that waits for a key (the title, the disc menu, the
 market's prompts, the pause). It copies at most once a frame: only if `DL` is set, which Elite's
 interrupt sets at each vsync and only `WSCAN` otherwise touches, and it clears it. So a screen that
-calls `RDKEY` over and over still leaves the buffer whole most of the time. There the copy comes
-just after each vsync, and this program polls once a frame too, so the two can lock, every fetch
-landing in the copy: one found under way is fetched again 4 ms later. It then returns what
+calls `RDKEY` over and over still leaves the mirror whole most of the time. There the copy comes
+just after each vsync, and this program polls once a frame too, so the two can lock, every read
+landing in the copy: one found under way is read again 4 ms later. It then returns what
 `RDKEY` would. It runs with interrupts on, so Elite's timer, and the dashboard's split, go on as ever.
 
 It lives where Elite's joystick code was, which never runs on keys (`JSTK` 0, and nothing in the player
@@ -72,9 +75,9 @@ becomes `LDA #0`. With `JSTK` set, the game now just plays on keys.
 
 **Keys in, without stopping.** Elite reads every key through one routine, `DKS4`, which asks the System
 VIA about one key. It's patched to look the key up in a list of six held keys in the `&FD00` window
-instead, `CMP &FD00,X`. The window shows a page of the Pi1MHz's JIM RAM: the page of the probe's stream
-buffer at offset `&500`, which this program writes with `POST /bbc/buffer` as soon as the held keys
-change, with no stop. The Pi copies a page into the window when a JIM page register is written, so the
+instead, `CMP &FD00,X`. The window shows a page of the Pi1MHz's JIM RAM: the input page in shared
+memory, which this program writes with `POST /bbc/shared` as soon as the held keys change, with no
+stop. The Pi copies a page into the window when a JIM page register is written, so the
 patched `DKS4` writes `&FCFF` first, and the copy routine does too. `RDKEY`, which scans every key, reads
 its answer from the window (`&FD08`: the lowest key held from 16 up, as its scan would find), which this
 program works out. Flight keys come with bit 7 set (`KYTB`), which the keyboard ignores and the patch
@@ -82,11 +85,9 @@ masks off. `DKS4` still returns the key number in A and X with bit 7 set if the 
 keeps its last byte the `RTS` that `DKS1` branches to.
 
 The window's page is set once, at BASIC's prompt before Elite loads (`BOOT=1`): nothing in Elite or
-the DFS writes the page registers, and a probe stop puts back the page it found when it goes on. Its
-top byte is the Pi's JIM RAM size in 16 MB less 2 (the stream buffer is 32 MB below the top); the Pi
-gives the size through its status port, which this program reads in one stop at the start (`JIMHI=`
-sets it instead). The docked copy includes the byte at `&FD10`, which this program sets, so it knows
-the window shows its page.
+the DFS writes the page registers, and a probe stop puts back the page it found when it goes on. The
+page comes from shared memory's JIM address in `GET /bbc`. The docked copy includes the byte at
+`&FD10`, which this program sets, so it knows the window shows its page.
 
 **Stopping.** The BBC is stopped only to patch a code just loaded, and to type a line. Each time a
 launch or a dock loads a code again (`D.CODE` and `T.CODE`, both at `&11E3`), the copies stop (the
@@ -94,9 +95,7 @@ routine went with the old code); after a second without one, `run_probe` stops t
 which code is in and that every byte it will change is as loaded (`T.CODE` is decrypted after it
 loads) and that the BBC isn't in any of them, and writes the routine and `DKS4` in, in one stop. A
 quiet spell without a load (a hyperspace, a save) costs a check every 1.5 s, then every 3 s. Every stop is
-by rung 1, the Pi's nIRQ, which Elite's handler passes on to the OS and the OS to `IRQ2V`; it ends
-with a peek of at least the mirror's length, as `GET /bbc/data` serves no more than the last peek
-left (a poke, none).
+by rung 1, the Pi's nIRQ, which Elite's handler passes on to the OS and the OS to `IRQ2V`.
 
 **Typing.** Elite reads two things through the OS (`OSWORD 0`, in `MT26`): the commander's name, from
 the disc menu, and a system's name, from a chart (`F`). Each letter, digit, SPACE and RETURN the
@@ -110,7 +109,8 @@ same `keyq` as `run_sim`, timed in those frames, and the player runs once a fram
 
 ## What it costs
 
-Measured on beebjit (Model B, MOS 1.20, DFS 0.90 on the 8271) with the probe's firmware on its test
+On a real Model B it has played with no stops in flight, made a commander Deadly and made kills in
+witchspace. Measured on beebjit (Model B, MOS 1.20, DFS 0.90 on the 8271) with the probe's firmware on its test
 board (`tests/beebjit`), over careers of 35 to 40 game minutes:
 
 | | |
@@ -138,8 +138,15 @@ much, but doesn't slow the game.
   on keys anyway, as `run_sim_b` does; and the routine is where the joystick code was.
 - **A Break takes the window's page with it**: boot again with `BOOT=1` (the page is set at BASIC's
   prompt). Without it, the keys go nowhere, and `run_probe` says so.
+- **Saving under MMFS can wreck the disc's catalogue.** MMFS keeps its copy of the catalogue at
+  `&0E00`, which is Elite's workspace, so a save can write Elite's bytes over it. Run with `SAVE=0`.
+  The 8271 DFS on beebjit saves safely.
+- **Some docked screens** can catch the player in a loop, pressing the same keys without getting
+  anywhere (in progress).
+- **No login.** `run_probe` sends none, so it can't reach a Pi1MHz whose web interface has one set
+  (the probe's routes are behind it).
 - **The probe's limits apply** (its `docs/dev/ramprobe.md`): don't open the Pi1MHz's help screen or SD
-  explorer while it plays, and nothing else should use the services port or the JIM page registers.
+  explorer while it plays, and nothing else should use shared memory, the services port or the JIM page registers.
 
 ## Testing it on beebjit
 
@@ -148,9 +155,11 @@ with the probe's own firmware C on its test board (a Model B, MOS 1.20, DFS 0.90
 the probe's HTTP routes on localhost, with disc Elite in its drive. From BASIC's prompt the test installs
 the probe, boots Elite and plays 8 game minutes. It passes if the game was found, bought at Lave, saved
 the commander to the disc (`E.CLAUDE` in its catalogue), launched and docked at Leesti, with no probe
-errors. It also checks the flight code was patched, and that the game was stopped less than 0.5 times a
-second and under 2% of the time. It takes about 10 minutes, and prints `SKIPPED` without beebjit,
-elite-agent, the Pi1MHz checkout (`stream-fixes` or later: it needs the stream buffer) or the disc.
+errors. It also checks the flight code was patched, and that the game was hardly stopped: less than
+0.5 times a second and under 2% of the time. The emulator counts the probe's stops itself
+(`GET /sim/stops`), boot and all: under 0.5 a second too, with a stretch of at least two
+minutes of play with none. It takes about 12 minutes, and prints `SKIPPED` without beebjit,
+elite-agent, a Pi1MHz checkout with shared memory, or the disc.
 
 ```sh
 ELITE_AGENT=~/elite-agent PI1MHZ=~/Pi1MHz elite/test_beebjit.sh
