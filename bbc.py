@@ -129,11 +129,13 @@ class BBC:
         rungs = [0, 1, 2] if vsync else [1, 0, 2]
         return [r for r in rungs if r <= self.max_rung]
 
-    def _ladder(self, path, body=None, vsync=False, **params):
+    def _ladder(self, path, body=None, vsync=False, regs=False, **params):
         """A way in, a rung at a time, the next only when one doesn't answer (the Pi then leaves
         nothing asked of the BBC).  Firmware without the ladder ignores rung= and stops it by
         NMI, as it always did."""
-        order = self._order(vsync)
+        order = [r for r in self._order(vsync) if not (regs and r == 0)]
+        if not order:
+            raise ProbeError("registers need rung 1 or 2, and max_rung is 0")
         for rung in order:
             try:
                 extra = {"nmi": 1} if rung == 2 else {}       # the firmware since the PR #51 review wants it
@@ -144,10 +146,14 @@ class BBC:
                 if f"rung {rung}" not in str(e) or rung == order[-1]:
                     raise
 
-    def halt(self, vsync=False):
-        return self._ladder("/bbc/halt", vsync=vsync)["stopped"]
+    def halt(self, vsync=False, regs=False):
+        """Stop it, and return the program's registers, or None after a rung 0 stop: that one is
+        inside the OS's vsync event, so the registers there are the OS's, and the firmware refuses
+        to set any.  regs=True skips rung 0, for a caller that wants to read or change them."""
+        return self._ladder("/bbc/halt", vsync=vsync, regs=regs)["stopped"]
 
     def go(self, **regs):
+        """Let it go on, with any registers given (not after a rung 0 stop: halt(regs=True))."""
         self._act("/bbc/continue", **regs)
 
     def peek(self, addr, length, bank=None):

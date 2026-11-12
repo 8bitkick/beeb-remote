@@ -109,8 +109,18 @@ def declined(req):
 
 
 # ---- the run --------------------------------------------------------------------------
-if not os.path.exists(RUN_BEEBJIT):
-    print(f"== remote client: skipped, no {RUN_BEEBJIT} ==")
+def missing():
+    """What run_beebjit.sh needs and doesn't have, or None."""
+    bj = os.path.expanduser(os.environ.get("BEEBJIT", "~/presto/beebjit-upstream"))
+    if not os.path.exists(os.path.join(bj, "bbc.c")) or not os.path.exists(os.path.join(bj, "roms", "os12.rom")):
+        return f"no beebjit at {bj} (BEEBJIT)"
+    if not os.path.exists(os.path.join(PI1MHZ, "src", "tests", "ramprobe", "board.h")):
+        return f"no Pi1MHz checkout with the probe's test board at {PI1MHZ} (PI1MHZ: ramprobe-fixes or stream-fixes)"
+    return None
+
+
+if missing():
+    print(f"== remote client: SKIPPED, {missing()} ==")
     sys.exit(0)
 server = subprocess.Popen(["sh", RUN_BEEBJIT, str(PORT)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 try:
@@ -140,6 +150,28 @@ try:
     sim("/sim/break")
     ok(bbc.ready(), "after a Break it's back by itself")
     ok(bbc.is_model_b(), "and it's a Model B")
+
+    print("== registers: a rung 0 stop has none (it's inside the OS); halt(regs=True) skips it")
+    b0 = BBC(HOST, max_rung=0)
+    ok(b0.halt() is None and b0.rung == 0, "rung 0: halted, no registers")
+    try:
+        b0.go(pc=0x2000)
+        ok(False, "continue at a new PC after rung 0 refused")
+    except ProbeError as e:
+        ok("rung 0" in str(e), f"continue at a new PC after rung 0 refused: {e}")
+    b0.go()
+    try:
+        b0.halt(regs=True)
+        ok(False, "halt(regs=True) with max_rung 0 refused")
+    except ProbeError as e:
+        ok("rung 1 or 2" in str(e), f"halt(regs=True) with max_rung 0 refused: {e}")
+    r = bbc.halt(regs=True)
+    ok(r is not None and bbc.rung == 1 and {"pc", "a", "s"} <= set(r), f"halt(regs=True): rung {bbc.rung}, {r}")
+    bbc.go(pc=r["pc"], a=r["a"])
+    time.sleep(0.3)
+    bbc.type("PRINT 6*7\r")
+    time.sleep(0.5)
+    ok(bbc.screen().splitlines()[-2].strip() == "42", "a continue that sets them, and BASIC carries on")
 
     print("== bbc.py on its own")
     bbc.type("PRINT 6*7\r")

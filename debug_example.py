@@ -22,8 +22,9 @@ bbc.type('NEW\r10 MODE 7\r20 REPEAT:I%=I%+1:PRINT TAB(4,4)"Counting: ";I%:UNTIL 
 time.sleep(3)
 
 banner = (bytes([132, 157, 135]) + b"  I% changed from the network  " + bytes([156])).ljust(40, b" ")
-with bbc.stopped():                                  # the BBC waits while this block runs
-    regs = bbc.status()["stopped"]                   # where it was stopped
+regs = bbc.halt(regs=True)                           # rung 1: the program's own registers
+with bbc.stopped():                                  # the BBC waits while this block runs (and
+                                                     # takes over the stop above)
     i = int.from_bytes(bbc.peek(0x0424, 4), "little")    # BASIC keeps I% at &0424
     bbc.poke(0x0424, (999990).to_bytes(4, "little"))
     bbc.poke(0x7C00 + 40 * 9, banner)                # straight into MODE 7 screen memory
