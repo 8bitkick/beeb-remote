@@ -14,8 +14,11 @@ Typing writes into the OS's keyboard buffer during a stop, which is safe whereve
 (the OS only takes from the buffer; this is the only thing putting in).  The layout is MOS 1.20's,
 checked on a Model B: a Master's MOS keeps that buffer elsewhere, so typing refuses there.
 """
+import hashlib
 import http.client
 import json
+import os
+import re
 import time
 import urllib.parse
 
@@ -40,9 +43,16 @@ class BBC:
     resort, for a BBC that won't answer otherwise (and on some BBCs it clicks the cassette
     relay); 2 allows it; 0 only the vsync event."""
 
-    def __init__(self, host, timeout=10.0, max_rung=1, retry_after=None):
+    def __init__(self, host, timeout=10.0, max_rung=1, retry_after=None, user=None, password=None):
         self.base = f"http://{host}"
         self.host = host
+        # The Pi1MHz's web interface can have a login (HTTP digest), which then guards the probe's
+        # routes too.  None (the default) takes PI1MHZ_USER and PI1MHZ_PASSWORD from the
+        # environment, so every application here can use it; with neither, no login is sent.
+        self.user = user if user is not None else os.environ.get("PI1MHZ_USER")
+        self.password = password if password is not None else os.environ.get("PI1MHZ_PASSWORD")
+        self._digest = None             # the server's last challenge: realm, nonce, qop, opaque
+        self._nc = 0
         self._conn = None               # one connection, kept open between requests
         self._api = None                # the probe's api: 2 takes wait=1 and poke bodies
         # retry_after: a request with no answer in this many seconds is sent again on a fresh
@@ -57,7 +67,52 @@ class BBC:
         self._depth = 0                 # with-blocks of stopped() open
 
     # ---- the probe's routes ----------------------------------------------------------
+    def _authorization(self, method, uri):
+        """The Authorization header for a request, from the server's last challenge (RFC 2617:
+        MD5, qop=auth), or None before any."""
+        d = self._digest
+        if not d or self.user is None:
+            return None
+        md5 = lambda t: hashlib.md5(t.encode()).hexdigest()
+        ha1 = md5(f"{self.user}:{d['realm']}:{self.password or ''}")
+        ha2 = md5(f"{method}:{uri}")
+        self._nc += 1
+        nc, cnonce = f"{self._nc:08x}", os.urandom(8).hex()
+        fields = {"username": self.user, "realm": d["realm"], "nonce": d["nonce"], "uri": uri}
+        if "auth" in d.get("qop", "").split(","):
+            fields.update(qop="auth", nc=nc, cnonce=cnonce,
+                          response=md5(f"{ha1}:{d['nonce']}:{nc}:{cnonce}:auth:{ha2}"))
+        else:
+            fields["response"] = md5(f"{ha1}:{d['nonce']}:{ha2}")
+        if "opaque" in d:
+            fields["opaque"] = d["opaque"]
+        return "Digest " + ", ".join(f'{k}={v}' if k in ("qop", "nc") else f'{k}="{v}"'
+                                     for k, v in fields.items())
+
     def _request(self, path, post=False, body=None, **params):
+        """One request, logging in first if the server asks and a user was given."""
+        for _ in range(2):
+            status, headers, data = self._send(path, post, body, **params)
+            challenge = headers.get("WWW-Authenticate", "")
+            if status != 401 or self.user is None or not challenge.lower().startswith("digest"):
+                break
+            stale = self._digest is not None and "stale=true" in challenge.lower()
+            if self._digest is not None and not stale:
+                break                   # turned down with a challenge it had answered: wrong login
+            self._digest = dict(re.findall(r'(\w+)="?([^",]*)"?', challenge[6:]))
+            self._nc = 0
+        if status == 401:
+            raise ProbeError(f"{path}: the Pi1MHz wants a login" + (": user and password wrong?" if self.user else
+                                                                    ": give BBC(user=, password=)"))
+        if status >= 400:
+            try:
+                why = json.loads(data).get("error") or f"HTTP {status}"
+            except json.JSONDecodeError:
+                why = f"HTTP {status}"
+            raise ProbeError(f"{path}: {why}")
+        return data
+
+    def _send(self, path, post=False, body=None, **params):
         """One request on the kept-open connection (HTTP/1.1 keep-alive: a new TCP connection
         for every request cost more than the request).  A connection the Pi has since closed
         (it drops idle ones after ~30 s) is opened again, once."""
@@ -69,6 +124,9 @@ class BBC:
                 self._conn = http.client.HTTPConnection(self.host, timeout=self.retry_after or self.timeout)
             try:
                 headers = {"Content-Type": "application/octet-stream"} if body else {}
+                auth = self._authorization("POST" if post else "GET", url)
+                if auth:
+                    headers["Authorization"] = auth
                 self._conn.request("POST" if post else "GET", url, body=body if body else (b"" if post else None),
                                    headers=headers)
                 r = self._conn.getresponse()
@@ -88,13 +146,7 @@ class BBC:
                 self._conn.close()
                 self._conn = None
                 raise ProbeError(f"{path}: can't reach the Pi1MHz at {self.base}: {e}") from None
-        if r.status >= 400:
-            try:
-                why = json.loads(data).get("error") or f"HTTP {r.status}"
-            except json.JSONDecodeError:
-                why = f"HTTP {r.status}"
-            raise ProbeError(f"{path}: {why}")
-        return data
+        return r.status, r.headers, data
 
     def status(self):
         s = json.loads(self._request("/bbc"))
