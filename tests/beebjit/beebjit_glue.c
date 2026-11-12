@@ -13,6 +13,7 @@
    The port is PI1MHZ_PORT in the environment. */
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -340,6 +341,7 @@ void pi1mhz_attach(struct bbc_struct *b)
    bbc = b;
    timing = bbc_get_timing(b);
    if (!was_reset) pi1mhz_bbc_reset();
+   signal(SIGPIPE, SIG_IGN);      /* a client gone mid-answer is its loss, not the server's end */
    listener = socket(AF_INET, SOCK_STREAM, 0);
    int yes = 1;
    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);

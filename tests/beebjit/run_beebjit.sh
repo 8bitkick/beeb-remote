@@ -5,6 +5,7 @@
 #   BEEBJIT    a beebjit checkout (default: ~/presto/beebjit-upstream)
 #   PI1MHZ     a Pi1MHz checkout on ramprobe-fixes, or stream-fixes for the stream buffer
 #              (default: ~/Pi1MHz).  Its test board, stubs and 6502code.bin are used.
+#   BEEBJIT_ARGS more of beebjit's options, such as "-0 disc.ssd -writeable -mutable" for a disc in drive 0
 
 #   run_beebjit.sh PORT      just serve it on 127.0.0.1:PORT
 set -e
@@ -93,6 +94,6 @@ gcc -std=gnu2x -O2 -g -D_GNU_SOURCE -w $(grep -q ramprobe_api_buffer "$SRC/rampr
 (cd "$B/bj" && gcc -O2 -g -DNDEBUG -DBEEBJIT_HEADLESS -fno-pie -no-pie -Wa,--noexecstack -w -o "$B/beebjit" \
     $BJ_FILES "$B"/pi/*.o -lm -lpthread) 2> "$B/build.log" || { cat "$B/build.log"; exit 1; }
 cd "$B/bj"
-run() { PI1MHZ_PORT=$1 exec "$B/beebjit" -headless -mode ${BEEBJIT_MODE:-interp} -max-frames 4000000000 -exit-on-max-frames; }
+run() { PI1MHZ_PORT=$1 exec "$B/beebjit" -headless -mode ${BEEBJIT_MODE:-interp} -max-frames 4000000000 -exit-on-max-frames $BEEBJIT_ARGS; }
 if [ -n "$1" ]; then run "$1"; fi
 echo "usage: run_beebjit.sh PORT"; exit 1
