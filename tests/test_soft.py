@@ -260,6 +260,22 @@ try:
     out = beeb.command(bbc, "PRINT 8*8")
     ok([l.strip() for l in out] == ["64"] and not bbc.soft_installed(),
        f"after soft_uninstall(), typing with stops and the routine left out: {out}, {sim_stops() - before} stops")
+    bbc.auto_soft = True
+    bbc.soft_install()
+    bbc.type("MODE 2:REPEAT UNTIL FALSE\r")         # a program running, in a graphics mode, as a game is
+    time.sleep(1)
+    bbc.soft_uninstall()
+    fresh = BBC(bbc.host)
+    before = sim_stops()
+    try:
+        fresh.type("PRINT 9*9\r")
+        ok(False, "typing into a running program put the routine in")
+    except ProbeError as ex:
+        ok("isn't at BASIC's prompt" in str(ex) and not fresh.soft_installed() and sim_stops() - before == 1,
+           f"a program running: the routine left out, nothing typed, one stop to look: {sim_stops() - before} stops")
+    bbc.auto_soft = False
+    bbc.escape()
+    time.sleep(0.5)
 finally:
     try:
         sim("/sim/quit")

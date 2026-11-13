@@ -221,8 +221,8 @@ class BBC:
         self._model_b = None
         self._depth = 0                 # with-blocks of stopped() open
         # type(), screen(), escape() and mode() go through the resident routine, putting it in
-        # (one stop) whenever it isn't, rather than stopping the BBC for every 30 characters.
-        # soft_uninstall() turns this off, for programs that want its memory.
+        # (one stop) whenever it isn't and BASIC is at its prompt, rather than stopping the BBC for
+        # every 30 characters.  soft_uninstall() turns this off, for programs that want its memory.
         self.auto_soft = True
 
     # ---- the probe's routes ----------------------------------------------------------
@@ -486,7 +486,8 @@ class BBC:
 
     def soft(self):
         """True if typing and reading go through the resident routine: it's in, or auto_soft is on
-        and it can be put in now (one stop; after the probe's install, on a Model B)."""
+        and it can be put in now (one stop; after the probe's install, on a Model B, with BASIC at
+        its prompt).  Raises ProbeError if a program is running instead: nothing is typed into it."""
         if self.soft_installed():
             return True
         if not self.auto_soft:
@@ -494,16 +495,18 @@ class BBC:
         s = self.status()
         if not (s.get("shared") and s.get("installed")):
             return False
-        self.soft_install()
+        self.soft_install(at_prompt=True)
         return True
 
     def _soft_place_from(self, s):
         at, size = s["shared"]["at"], s["shared"]["size"]
         return at, size - SOFT_CTL, size - SOFT_RING, size - SOFT_SCR
 
-    def soft_install(self):
+    def soft_install(self, at_prompt=False):
         """Put the resident routine in, with one stop.  From then on type(), screen() and escape()
-        take none.  Model B only (MOS 1.20's buffers and screen variables)."""
+        take none.  Model B only (MOS 1.20's buffers and screen variables).  at_prompt: only if
+        BASIC is waiting at its prompt in MODE 7, checked in the same stop, so that a program
+        running (a game, which may use &0A00 itself) is left alone."""
         if self.soft_installed():
             return
         at, ctl, ring, scr = self._soft_place()
@@ -532,6 +535,14 @@ class BBC:
             e = self.peek(0x0220, 2)
             if e[0] | e[1] << 8 != SOFT_PROBE_EVNTV:
                 raise ProbeError(f"EVNTV is &{e[1]:02X}{e[0]:02X}, not the probe's hook: type the install line again")
+            if at_prompt:
+                mode = self.peek(0x0355, 1)[0]
+                v = self.peek(0x0350, 2)
+                lines = [l for l in self._mode7_text(self.peek(0x7C00, 0x400), v[0] | v[1] << 8).splitlines()
+                         if l.strip()] if mode == 7 else []
+                if not lines or lines[-1].strip() != ">":
+                    raise ProbeError(f"the resident routine is out and the BBC isn't at BASIC's prompt (MODE {mode}): "
+                                     "a program is running, so nothing typed or read; soft_install() if you mean it")
             f = self.peek(0x021E, 2)
             if f[0] | f[1] << 8 == SOFT_AT:
                 raise ProbeError("FSCV leads to &0A00: *CLAUDE's hook is there (star_claude.py); a Break takes it out")
@@ -730,6 +741,11 @@ class BBC:
                 top = vars_[0] | vars_[1] << 8
         if mode != 7:
             return f"(MODE {mode}: a graphics mode, which can't be read as text)"
+        return self._mode7_text(ram, top)
+
+    @staticmethod
+    def _mode7_text(ram, top):
+        """MODE 7's screen memory (&7C00-&7FFF, the screen starting at top) as 25 lines of text."""
         rows = []
         for r in range(25):
             row = ""
