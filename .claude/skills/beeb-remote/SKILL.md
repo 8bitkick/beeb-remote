@@ -18,8 +18,15 @@ interrupts off, 1 MHz bus polling and shared-memory traffic are all silent; stop
 
 - **Shared memory never stops the BBC:** `bbc.shared_write()` / `shared_read()` (HTTP
   `POST/GET /bbc/shared`). Anything live (video, games, frequent reads) must go through it.
-- Typing and screen reads cost about one stop each. Never poll the screen in a loop; wait a
-  calculated time, then read once (`beeb.py cmd` does this).
+- **For everyday typing and reading, put the resident routine in once:** `./beeb.py soft-install`
+  (one stop, after the probe's install line, and again after any Break). From then on `cmd`,
+  `basic` and `screen` take **no stops**: they go through shared memory, and `cmd` takes any
+  length. `./beeb.py status` ends with "soft typing in" while it is. `./beeb.py soft-uninstall`
+  takes it out with no stop. It lives at `&0A00`, the cassette/RS423 input buffer: take it out
+  before loading from tape or using RS423 input, and before `*CLAUDE` (star_claude.py's hook
+  wants `&0A00` too). demo50, bitmap_play and elite/run_probe take it out themselves.
+- Without it, typing and screen reads cost about one stop each. Never poll the screen in a loop;
+  wait a calculated time, then read once (`beeb.py cmd` does this).
 - Never drive anything real-time with stops. Ask before any run that stops the BBC repeatedly.
 - `GET /bbc`'s `stops` counts them: check it before and after anything you claim is stop-free.
 
@@ -28,7 +35,8 @@ interrupts off, 1 MHz bus polling and shared-memory traffic are all silent; stop
 ```sh
 export PI1MHZ_HOST=pi1mhz.local
 ./beeb.py status                 # state, installed, build, stops, shared memory
-./beeb.py cmd "*CAT" --expect 1  # one line (<= 29 chars), its output; exit 1 on a BBC error
+./beeb.py soft-install           # once: typing and reading with no stops (one stop now)
+./beeb.py cmd "*CAT" --expect 1  # one line, its output; exit 1 on a BBC error (<= 29 chars without soft-install)
 ./beeb.py screen                 # MODE 7 screen as text (graphics modes can't be read)
 ./beeb.py basic prog.bas         # NEW, type it, RUN, screen
 ./beeb.py peek 0x70 16 ; ./beeb.py poke 0x5000 A92A60

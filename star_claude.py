@@ -172,6 +172,9 @@ class Watcher:
     def check(self):
         """One stop: put the hook in if it isn't, and return a prompt waiting, if there is one."""
         bbc = self.bbc
+        if bbc.soft_installed():               # bbc.py's resident routine has &0A00
+            self.log("[the resident routine for typing is at &0A00: beeb.py soft-uninstall, for *CLAUDE]")
+            return None
         with bbc.stopped():
             v = bbc.peek(FSCV, 2)
             fscv = v[0] | v[1] << 8

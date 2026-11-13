@@ -528,6 +528,32 @@ static void type_text(const char *text) {
     }
 }
 
+// bbc.py's resident routine for typing (soft_install) is chained into the vsync event from
+// &0A00, which the game may write over, and its mailbox is in shared memory's top pages: ask it
+// to take itself out first, through that mailbox (no stop).  Its control page is the page before
+// the last; bytes 16-23 are "SOFT" and the reset count at its install, byte 0 the request and
+// byte 4 its answer.  A Break since its install has taken it out already.
+static void soft_uninstall(long size, long resets) {
+    long ctl = size - 0x200;
+    uint8_t c[24];
+    if (shared_get((int) ctl, sizeof c, c)) die("can't read shared memory");
+    if (memcmp(c + 16, "SOFT", 4)) return;
+    long at = c[20] | c[21] << 8 | c[22] << 16 | (long) c[23] << 24;
+    if (at == resets && c[4] == 0) {
+        const uint8_t one = 1;
+        if (shared_put((int) ctl, &one, 1)) die("can't write shared memory");
+        double until = now_s() + 2;
+        while (c[4] == 0 && now_s() < until) {
+            usleep(20000);
+            if (shared_get((int) ctl + 4, 1, c + 4)) die("can't read shared memory");
+        }
+        if (c[4] == 0) die("bbc.py's resident routine for typing is in and doesn't answer: beeb.py soft-uninstall first");
+        printf("took out bbc.py's resident routine for typing (it is at &0A00)\n");
+    }
+    memset(c, 0, sizeof c);
+    if (shared_put((int) ctl, c, sizeof c)) die("can't write shared memory");
+}
+
 static void boot(void) {
     char err[200];
     uint8_t v[2];
@@ -826,6 +852,7 @@ int main(int argc, char **argv) {
     s_shared_at = (uint32_t) json_num(sh, "at"), s_shared_jim = (uint32_t) json_num(sh, "jim");
     if ((s_shared_at | s_shared_jim) & 0xFFFF)
         die("shared memory at services &%06X, JIM &%08X: the patches want it on a 64 KB boundary", s_shared_at, s_shared_jim);
+    soft_uninstall(json_num(sh, "size"), json_num(st, "resets"));
     for (int c = 0; c < 2; c++)
         for (int g = 0; g < NREG; g++)
             for (int i = 0; i < REGION[c][g].n; i++) {

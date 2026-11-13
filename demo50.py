@@ -933,6 +933,8 @@ def main():
         if not bbc.ready():
             print(f"The probe isn't in: type {BBC.install_line()} on the BBC")
             return 1
+        if bbc.soft_uninstall():            # its mailbox is in the shared memory the video takes
+            print("took out bbc.py's resident routine for typing first")
         secs = sum(s for _, s in plan)
         shared = bbc.shared()
         room = min(STREAM_SIZE, shared["size"] - 0x100)

@@ -132,12 +132,17 @@ try:
     ok(bbc.ready(), "the probe is in")
     keys = bbc.peek(0x0B00, 0x100)
     work = bbc.peek(demo50.BLOCKS, len(demo50.BLOCKS_CODE))
+    bbc.soft_install()                         # bbc.py's resident routine: demo50 takes it out first
+    ok(bbc.soft_installed(), "the resident routine for typing is in")
     for plan, extra in PLAYS:
         frames = int(sum(float(s) for _, s in (p.split(":") for p in plan.split(","))) * 50)
         print(f"== --plan {plan} {' '.join(extra)}")
         rc, text, stops, took = play(bbc, clip, plan, extra)
         counted = [l for l in text.splitlines() if l.startswith("the player counted")]
         ok(rc == 0, f"demo50 finished: {rc}")
+        if plan == PLAYS[0][0]:
+            ok("took out bbc.py's resident routine" in text and not bbc.soft_installed(),
+               "demo50 took the resident routine out before playing")
         ok(counted == [f"the player counted {frames} frames, 0 started late"],
            f"every frame, none late: {counted or text.splitlines()[-3:]}")
         ok(stops == 0, f"no stops while it played ({took:.1f} s): {stops}")

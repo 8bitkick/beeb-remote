@@ -288,6 +288,8 @@ def main():
         if not bbc.ready():
             print(f"The probe isn't in: type {BBC.install_line()} on the BBC")
             return 1
+        if bbc.soft_uninstall():            # its mailbox is in the shared memory the video takes
+            print("took out bbc.py's resident routine for typing first")
         if len(data) > bbc.shared()["size"] - 0x100:
             print(f"{len(data) // 1024} KB is more than this Pi1MHz's shared memory takes: use --seconds")
             return 1

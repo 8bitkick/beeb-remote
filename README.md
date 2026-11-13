@@ -255,6 +255,17 @@ with `max_rung=2`. A stop and go takes 4 ms on a Model B. That suits a debugger,
 or reading the screen now and then. Typing writes into MOS 1.20's keyboard buffer during a stop;
 reading the screen reads MODE 7's screen memory; Escape sets the OS's escape flag.
 
+**Typing and reading the screen with no stops.** `bbc.soft_install()` (or `beeb.py
+soft-install`) puts a 254-byte routine into the cassette and RS423 input buffer at `&0A00`, with
+one stop. It runs on every vsync, chained behind the probe's own vsync hook, and works through a
+mailbox in shared memory: the client writes keys into a ring there and the routine moves them into
+the keyboard buffer while there's room; on request it copies MODE 7's screen memory there, 128
+bytes a vsync. From then on `type()`, `screen()`, `escape()` and `run_basic()`, and `beeb.py`'s
+`cmd`, `basic` and `screen`, make no stops. Idle, it costs about 110 µs a vsync: it saves the
+services port's address, reads four bytes of the mailbox, and puts the address back. A tape load
+or RS423 input would write over it, so `soft_uninstall()` first (it takes itself out, with no
+stop); demo50, bitmap_play and elite/run_probe do that themselves. Any Break takes it out.
+
 **Shared memory, for a live remote application.** The Pi1MHz has 4 MB that both sides use while
 the BBC runs. The application writes and reads it over HTTP (`POST` and `GET /bbc/shared`), with
 no stop. Its own code on the BBC reaches it through the Pi1MHz's services port (`&FCA6-&FCA9`: an
@@ -286,6 +297,7 @@ mirror the BBC writes.
 | `demo50.py`, `bitmap_play.py` | the video's stream, from `+&0000` |
 | `elite/run_probe` | input page at `+&0000`: the held keys, read through the `&FD00` window. State mirror at `+&0100`: Elite's RAM, written through the services port |
 | `star_claude.py` | its doorbell in the last page |
+| `bbc.py`'s resident routine | its mailbox below that: a control page at `size-&200`, the typing ring at `size-&300`, the screen's copy at `size-&700` to `size-&301` |
 
 | File | What |
 |---|---|
@@ -309,6 +321,7 @@ the probe in `PI1MHZ` (default `~/Pi1MHz`) and a beebjit checkout in `BEEBJIT`.
 python3 -I tests/test_agent.py
 python3 -I tests/test_star_claude.py
 python3 -I tests/test_demo50.py                          # a short clip: 0 late, 0 stops
+python3 -I tests/test_soft.py                            # typing and reading with no stops
 ELITE_AGENT=~/elite-agent elite/test_beebjit.sh          # 8 game minutes of Elite, about 12 minutes
 ```
 
