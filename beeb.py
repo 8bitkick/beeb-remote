@@ -10,15 +10,14 @@ checked.  Built on bbc.py.  The host is --host or PI1MHZ_HOST (default Pi1MHz.lo
     beeb.py peek ADDR LEN               hex
     beeb.py poke ADDR HEX
     beeb.py stops                       the probe's stop counter (each stop can click the relay)
-    beeb.py soft-install                put in the resident routine (one stop), for typing and
-                                        reading the screen with none
+    beeb.py soft-install                put in the resident routine now (one stop); cmd, basic
+                                        and screen do it themselves when it isn't in
     beeb.py soft-uninstall              take it out (no stop, unless it doesn't answer)
 
 Every probe operation on BBC RAM is a stop: the BBC freezes for milliseconds and the cassette
-relay may click.  Without the resident routine `cmd` takes two (one to type, one to read the
-screen) plus one per extra wait, and never polls.  With it (soft-install, once after the probe's
-install line), `cmd`, `basic` and `screen` take none: they type and read through shared memory,
-which takes no stop (bbc.py shared_read/shared_write).
+relay may click.  Typing and reading the screen go through the resident routine, which puts
+characters in and copies the screen out through shared memory, with no stop; bbc.py puts it in
+(one stop) whenever it isn't, such as after a Break.
 """
 import argparse
 import os
@@ -40,7 +39,7 @@ def command(bbc, line, expect=0.5, timeout=30.0):
     printed.  If the prompt isn't back, wait twice as long and read again.  Raises ProbeError
     with the message if the BBC printed an error.  With the resident routine in, no stops and any
     length; without it, 29 characters at most (one stop to type) and one stop per read."""
-    if len(line) > 29 and not bbc.soft_installed():
+    if len(line) > 29 and not bbc.soft():
         raise ProbeError(f"{line!r}: 29 characters at most, so it goes in with one stop (or soft-install)")
     bbc.type(line + "\r", wait=False)
     wait = 0.05 * (len(line) + 1) + expect

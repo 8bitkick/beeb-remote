@@ -220,6 +220,10 @@ class BBC:
         self._resets = None
         self._model_b = None
         self._depth = 0                 # with-blocks of stopped() open
+        # type(), screen(), escape() and mode() go through the resident routine, putting it in
+        # (one stop) whenever it isn't, rather than stopping the BBC for every 30 characters.
+        # soft_uninstall() turns this off, for programs that want its memory.
+        self.auto_soft = True
 
     # ---- the probe's routes ----------------------------------------------------------
     def _authorization(self, method, uri):
@@ -480,6 +484,19 @@ class BBC:
         return (c[C_MARK:C_MARK + 4] == SOFT_MAGIC and c[C_GONE] == 0
                 and int.from_bytes(c[C_MARK + 4:C_MARK + 8], "little") == s["resets"])
 
+    def soft(self):
+        """True if typing and reading go through the resident routine: it's in, or auto_soft is on
+        and it can be put in now (one stop; after the probe's install, on a Model B)."""
+        if self.soft_installed():
+            return True
+        if not self.auto_soft:
+            return False
+        s = self.status()
+        if not (s.get("shared") and s.get("installed")):
+            return False
+        self.soft_install()
+        return True
+
     def _soft_place_from(self, s):
         at, size = s["shared"]["at"], s["shared"]["size"]
         return at, size - SOFT_CTL, size - SOFT_RING, size - SOFT_SCR
@@ -535,7 +552,8 @@ class BBC:
 
     def soft_uninstall(self, timeout=2.0):
         """Take the resident routine out: by asking it (no stop), or, if it doesn't answer, with one
-        stop.  True if it was in."""
+        stop.  True if it was in.  type() and the rest then stop the BBC instead of putting it back."""
+        self.auto_soft = False
         s = self.status()
         if not s.get("shared"):
             return False
@@ -638,7 +656,7 @@ class BBC:
         at once: for a command that takes the machine over (interrupts off), which the probe
         can't stop to look at the buffer afterwards.  With the resident routine in
         (soft_install()), through it, with no stop."""
-        if self.soft_installed():
+        if self.soft():
             return self.soft_type(text, timeout, wait)
         if self._model_b is None:
             self._model_b = self.is_model_b()
@@ -684,7 +702,7 @@ class BBC:
 
     def escape(self):
         """Press Escape: set the OS's escape flag, which BASIC checks between statements."""
-        if self.soft_installed():
+        if self.soft():
             return self.soft_escape()
         with self.stopped():
             flag = self.peek(ESCAPE_FLAG, 1)[0]
@@ -692,7 +710,7 @@ class BBC:
 
     # ---- the screen ------------------------------------------------------------------
     def mode(self):
-        if self.soft_installed():
+        if self.soft():
             return self.soft_screen()[2]
         with self.stopped():
             return self.peek(0x0355, 1)[0]
@@ -700,7 +718,7 @@ class BBC:
     def screen(self):
         """The screen as text: MODE 7's 25 lines of 40.  Other modes are pictures, not text, so
         this says which mode instead.  With the resident routine in, from its copy, with no stop."""
-        if self.soft_installed():
+        if self.soft():
             ram, top, mode = self.soft_screen()
         else:
             with self.stopped():

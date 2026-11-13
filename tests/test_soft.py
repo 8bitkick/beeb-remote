@@ -250,8 +250,16 @@ try:
     sim("/sim/type", text=BBC.install_line() + "\r")
     ok(bbc.ready() and not bbc.soft_installed(), "Ctrl-Break and the install line: the routine out")
     ok(vectors(bbc) == (evntv, hooked), "EVNTV the probe's hook, to the OS's default")
+    bbc.auto_soft = True                       # as a new BBC() is; soft_uninstall() above turned it off
+    before = sim_stops()
     out = beeb.command(bbc, "PRINT 7*7")
-    ok([l.strip() for l in out] == ["49"], f"typing with stops: {out}")
+    ok([l.strip() for l in out] == ["49"] and bbc.soft_installed() and sim_stops() - before == 1,
+       f"typing puts the routine back by itself, with one stop: {out}, {sim_stops() - before} stops")
+    bbc.soft_uninstall()
+    before = sim_stops()
+    out = beeb.command(bbc, "PRINT 8*8")
+    ok([l.strip() for l in out] == ["64"] and not bbc.soft_installed(),
+       f"after soft_uninstall(), typing with stops and the routine left out: {out}, {sim_stops() - before} stops")
 finally:
     try:
         sim("/sim/quit")
