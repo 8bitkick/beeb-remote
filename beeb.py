@@ -100,7 +100,7 @@ def main():
             print(bbc.screen())
         elif o.what == "basic":
             src = sys.stdin.read() if o.file == "-" else open(o.file).read()
-            print(bbc.run_basic(src, o.seconds))
+            print(bbc.run_basic(src, o.seconds)["screen"])
         elif o.what == "peek":
             print(bbc.peek(int(o.addr, 0), int(o.len, 0)).hex())
         elif o.what == "poke":
