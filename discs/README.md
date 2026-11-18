@@ -6,7 +6,7 @@ codec chooses one volume write per sample from all 4,096 volume combinations, as
 | Disc | Machine | What | Run it in jsbeeb |
 |---|---|---|---|
 | `sn_stream.adl` | Master 128, ADFS | 41 s of President Kennedy at Rice University, 1962, streamed from disc as it reads, 15.6 kHz | [play](https://bbc.xania.org/?disc=https://raw.githubusercontent.com/8bitkick/beeb-remote/sn-audio-discs/discs/sn_stream.adl&autoboot&model=MasterADFS&noseek) |
-| `bemybaby_stream.adl` | Master 128, ADFS | the first 41 s of *Be My Baby* (The Ronettes, 1963), streamed from disc, 15.6 kHz, peak-limited and using the full range for loudness | [play](https://bbc.xania.org/?disc=https://raw.githubusercontent.com/8bitkick/beeb-remote/sn-audio-discs/discs/bemybaby_stream.adl&autoboot&model=MasterADFS&noseek) |
+| `bemybaby_stream.adl` | Master 128, ADFS | the first 41 s of *Be My Baby* (The Ronettes, 1963), streamed from disc, 15.6 kHz, its loudest 0.3% of samples limited and the full range used, for loudness | [play](https://bbc.xania.org/?disc=https://raw.githubusercontent.com/8bitkick/beeb-remote/sn-audio-discs/discs/bemybaby_stream.adl&autoboot&model=MasterADFS&noseek) |
 | `sn_master.dsd` | Master 128, DFS | 5.4 s from RAM at 20.8 kHz: side 0 Kennedy, side 2 *Funkorama* (`*RUN :2.PLAY`) | [play](https://bbc.xania.org/?disc=https://raw.githubusercontent.com/8bitkick/beeb-remote/sn-audio-discs/discs/sn_master.dsd&autoboot&model=Master&noseek) |
 
 On a real Master, boot `sn_stream.adl` with SHIFT+A+BREAK and `sn_master.dsd` with SHIFT+BREAK.
